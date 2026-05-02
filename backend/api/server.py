@@ -76,8 +76,18 @@ def _cleanup_expired_sessions() -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# HEALTH
+# ROOT & HEALTH
 # ═══════════════════════════════════════════════════════════════════════════
+@app.get("/")
+async def root():
+    return {
+        "message": "Welcome to YOLOForge API",
+        "status": "online",
+        "docs": "/docs",
+        "health": "/health"
+    }
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "YOLOForge", "version": "2.1.0"}
