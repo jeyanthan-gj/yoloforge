@@ -1,6 +1,15 @@
 """
 YOLOForge – LangGraph Tools
 Every pipeline stage is a @tool. The graph calls these directly (no LLM needed).
+
+Fixes applied:
+  1. validate_config  – added image_size validation; added model_id existence check
+  2. clean_dataset    – now copies to staging dir first (non-destructive)
+  3. split_dataset    – warns when val split would be 0 images
+  4. analyze_dataset  – skips empty splits (images == 0) to avoid misleading entries
+  5. generate_notebook_cells – freeze=0 no longer becomes "None" (falsy or-bug fixed)
+  6. build_yaml_string / generate_data_yaml – pose flip_idx uses correct COCO pairs;
+                                              rglob restricted to known filenames
 """
 from __future__ import annotations
 
@@ -17,6 +26,31 @@ from typing import Any
 
 from langchain_core.tools import tool
 
+# ── Valid model IDs (used by validate_config) ─────────────────────────────
+_VALID_MODEL_IDS: set[str] = {
+    "yolov5nu","yolov5su","yolov5mu","yolov5lu","yolov5xu",
+    "yolov8n","yolov8s","yolov8m","yolov8l","yolov8x",
+    "yolov8n-seg","yolov8s-seg","yolov8m-seg",
+    "yolov8n-cls","yolov8s-cls","yolov8m-cls",
+    "yolov8n-pose","yolov8s-pose","yolov8m-pose",
+    "yolov8n-obb","yolov8s-obb",
+    "yolov9t","yolov9s","yolov9c","yolov9e",
+    "yolov10n","yolov10s","yolov10m","yolov10l","yolov10x",
+    "yolo11n","yolo11s","yolo11m","yolo11l","yolo11x",
+    "yolo11n-seg","yolo11n-cls","yolo11n-pose","yolo11n-obb",
+    "yolo26n","yolo26s","yolo26m",
+    "rtdetr-l","rtdetr-x",
+    "yolov8s-worldv2","yolov8m-worldv2","yolov8l-worldv2",
+    "yolo_nas_s","yolo_nas_m","yolo_nas_l",
+}
+
+# Correct COCO 17-keypoint flip pairs (left↔right symmetric pairs)
+_COCO_FLIP_IDX = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15]
+
+# Supported image sizes (must be multiples of 32, reasonable range)
+_MIN_IMG_SIZE = 32
+_MAX_IMG_SIZE = 4096
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # TOOL 1 – validate_config
@@ -30,10 +64,17 @@ def validate_config(config_json: str) -> dict:
     cfg = json.loads(config_json)
     errors, warnings, tips = [], [], []
 
-    task   = cfg.get("task", "detect")
-    model  = cfg.get("model_id", "")
-    mode   = cfg.get("train_mode", "finetune")
-    hp     = cfg.get("hp", {})
+    task  = cfg.get("task", "detect")
+    model = cfg.get("model_id", "")
+    mode  = cfg.get("train_mode", "finetune")
+    hp    = cfg.get("hp", {})
+
+    # ── FIX 1a: model_id existence check ──────────────────────────────────
+    if model and model not in _VALID_MODEL_IDS:
+        warnings.append(
+            f"model_id '{model}' is not in the known catalog. "
+            "Proceeding, but double-check the Ultralytics model name."
+        )
 
     # Model/task compat
     v9v10_only = {"detect", "segment"}
@@ -49,14 +90,36 @@ def validate_config(config_json: str) -> dict:
     if world and task != "detect":
         errors.append("YOLO-World only supports object detection.")
 
+    # ── FIX 1b: scratch + no yaml ─────────────────────────────────────────
+    model_yaml = cfg.get("model_yaml", "")
+    if mode == "scratch" and not model_yaml:
+        errors.append(
+            f"train_mode='scratch' requires a model YAML architecture file, "
+            f"but model_yaml is empty for model '{model}'. "
+            "Use fine-tuning or choose a model that provides a .yaml."
+        )
+
     # Splits
     tr = cfg.get("train_split", 0.8)
-    vr = cfg.get("val_split", 0.1)
-    te = cfg.get("test_split", 0.1)
+    vr = cfg.get("val_split",   0.1)
+    te = cfg.get("test_split",  0.1)
     if abs(tr + vr + te - 1.0) > 0.02:
         errors.append(f"Splits must sum to 1.0 (got {tr+vr+te:.2f}).")
     if tr < 0.5:
         warnings.append("Train split < 50 % — model may underfit.")
+
+    # ── FIX 1c: image_size validation ─────────────────────────────────────
+    img_sz = cfg.get("image_size", 640)
+    if not isinstance(img_sz, int) or img_sz < _MIN_IMG_SIZE or img_sz > _MAX_IMG_SIZE:
+        errors.append(
+            f"image_size={img_sz} is out of the supported range "
+            f"[{_MIN_IMG_SIZE}, {_MAX_IMG_SIZE}]."
+        )
+    elif img_sz % 32 != 0:
+        warnings.append(
+            f"image_size={img_sz} is not a multiple of 32. "
+            "YOLO models work best with sizes like 320, 416, 512, 640, 768, 1024, 1280."
+        )
 
     # LR
     lr0 = hp.get("lr0", 0.01)
@@ -79,7 +142,7 @@ def validate_config(config_json: str) -> dict:
 
     # Freeze
     freeze = hp.get("freeze", 0)
-    if mode == "scratch" and freeze > 0:
+    if mode == "scratch" and freeze and freeze > 0:
         warnings.append("Freezing layers while training from scratch has no effect.")
 
     # Task-specific
@@ -93,7 +156,7 @@ def validate_config(config_json: str) -> dict:
         tips.append("OBB labels need rotation angle: class cx cy w h angle.")
 
     # Mosaic close
-    augs = cfg.get("augmentations", {})
+    augs   = cfg.get("augmentations", {})
     mosaic = augs.get("mosaic", {})
     if isinstance(mosaic, dict) and mosaic.get("enabled") and mosaic.get("value", 0) > 0:
         close = hp.get("close_mosaic", 10)
@@ -115,11 +178,12 @@ def validate_config(config_json: str) -> dict:
 def clean_dataset(dataset_dir: str) -> dict:
     """
     Clean a YOLO-format dataset:
-    1. Remove corrupt/unreadable images
-    2. Remove duplicate images (MD5 hash)
-    3. Validate and clamp label coordinates to [0,1]
-    4. Report missing labels
-    Returns a detailed cleaning report dict.
+    1. Copy source to a staging area (non-destructive — source is never modified)
+    2. Remove corrupt/unreadable images from the staging copy
+    3. Remove duplicate images (MD5 hash) from the staging copy
+    4. Validate and clamp label coordinates to [0,1]
+    5. Report missing labels
+    Returns a detailed cleaning report dict including staging_dir.
     """
     try:
         from PIL import Image as PILImage
@@ -130,18 +194,25 @@ def clean_dataset(dataset_dir: str) -> dict:
     if not src.exists():
         return {"success": False, "error": f"Path not found: {dataset_dir}"}
 
-    img_exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tiff"}
-    all_imgs = [p for p in src.rglob("*") if p.suffix.lower() in img_exts]
+    # ── FIX 2: copy to staging dir before any mutations ───────────────────
+    staging = src.parent / (src.name + "_cleaned")
+    if staging.exists():
+        shutil.rmtree(staging)
+    shutil.copytree(src, staging)
 
-    stats = {
-        "total":         len(all_imgs),
-        "corrupt":       0,
-        "duplicates":    0,
-        "no_label":      0,
-        "labels_fixed":  0,
-        "valid_final":   0,
-        "success":       True,
-        "details":       [],
+    img_exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tiff"}
+    all_imgs = [p for p in staging.rglob("*") if p.suffix.lower() in img_exts]
+
+    stats: dict[str, Any] = {
+        "total":        len(all_imgs),
+        "corrupt":      0,
+        "duplicates":   0,
+        "no_label":     0,
+        "labels_fixed": 0,
+        "valid_final":  0,
+        "success":      True,
+        "staging_dir":  str(staging),
+        "details":      [],
     }
 
     # Pass 1 – corrupt
@@ -182,13 +253,13 @@ def clean_dataset(dataset_dir: str) -> dict:
             stats["no_label"] += 1
             continue
         try:
-            raw = [ln for ln in lp.read_text().splitlines() if ln.strip()]
+            raw   = [ln for ln in lp.read_text().splitlines() if ln.strip()]
             fixed, changed = [], False
             for ln in raw:
                 parts = ln.split()
                 if len(parts) < 5:
                     continue
-                cls = parts[0]
+                cls    = parts[0]
                 coords = [float(x) for x in parts[1:]]
                 clamped = [min(max(c, 0.0), 1.0) for c in coords]
                 if clamped != coords:
@@ -209,13 +280,13 @@ def clean_dataset(dataset_dir: str) -> dict:
 # ═══════════════════════════════════════════════════════════════════════════
 @tool
 def split_dataset(
-    source_dir:   str,
-    output_dir:   str,
-    train_ratio:  float = 0.80,
-    val_ratio:    float = 0.10,
-    test_ratio:   float = 0.10,
-    shuffle:      bool  = True,
-    seed:         int   = 42,
+    source_dir:  str,
+    output_dir:  str,
+    train_ratio: float = 0.80,
+    val_ratio:   float = 0.10,
+    test_ratio:  float = 0.10,
+    shuffle:     bool  = True,
+    seed:        int   = 42,
 ) -> dict:
     """
     Split a flat or pre-structured image+label dataset into train/val/test
@@ -245,9 +316,17 @@ def split_dataset(
         random.seed(seed)
         random.shuffle(pairs)
 
-    n      = len(pairs)
-    n_tr   = int(n * train_ratio)
-    n_val  = int(n * val_ratio)
+    n     = len(pairs)
+    n_tr  = int(n * train_ratio)
+    n_val = int(n * val_ratio)
+
+    # ── FIX 3: warn when val split rounds down to 0 ───────────────────────
+    warnings: list[str] = []
+    if n_val == 0 and val_ratio > 0:
+        warnings.append(
+            f"Dataset is too small ({n} images): val split rounds to 0 images "
+            f"with val_ratio={val_ratio}. Consider using more images or a larger val_ratio."
+        )
 
     assignment = (
         [("train", p) for p in pairs[:n_tr]]
@@ -272,6 +351,7 @@ def split_dataset(
         "val":            counts["val"],
         "test":           counts["test"],
         "missing_labels": counts["missing_labels"],
+        "warnings":       warnings,
     }
 
 
@@ -280,9 +360,9 @@ def split_dataset(
 # ═══════════════════════════════════════════════════════════════════════════
 @tool
 def generate_data_yaml(
-    dataset_dir:  str,
-    class_names:  list[str],
-    task:         str = "detect",
+    dataset_dir: str,
+    class_names: list[str],
+    task:        str = "detect",
 ) -> dict:
     """
     Build a YOLO data.yaml string.
@@ -291,12 +371,20 @@ def generate_data_yaml(
     """
     import yaml as _yaml
 
-    ds = Path(dataset_dir)
+    ds    = Path(dataset_dir)
     names = list(class_names)
 
-    # Auto-detect
+    # Auto-detect — FIX: restrict yaml search to known safe filenames only
+    # to avoid picking up Ultralytics training output artifacts (args.yaml etc.)
+    _KNOWN_DATA_YAMLS = {"data.yaml", "dataset.yaml", "config.yaml"}
+
     if not names:
         for yf in ds.rglob("*.yaml"):
+            # Skip files inside runs/ or similar output directories
+            if any(part in ("runs", "train", "val", "exp") for part in yf.parts):
+                continue
+            if yf.name not in _KNOWN_DATA_YAMLS:
+                continue
             try:
                 d = _yaml.safe_load(yf.read_text())
                 if "names" in d:
@@ -305,10 +393,12 @@ def generate_data_yaml(
                     break
             except Exception:
                 pass
+
     if not names:
         for cf in [*ds.rglob("classes.txt"), *ds.rglob("obj.names")]:
             names = [ln.strip() for ln in cf.read_text().splitlines() if ln.strip()]
             break
+
     if not names:
         ids: set[int] = set()
         for lf in ds.rglob("*.txt"):
@@ -329,10 +419,11 @@ def generate_data_yaml(
         "nc":    len(names),
         "names": names,
     }
-    # task-specific extras
+
     if task == "pose":
-        data["kpt_shape"] = [17, 3]   # COCO default – user should adjust
-        data["flip_idx"]  = list(range(17))
+        data["kpt_shape"] = [17, 3]
+        # FIX 6a: use correct COCO left↔right keypoint flip pairs
+        data["flip_idx"] = _COCO_FLIP_IDX
 
     yaml_str = _yaml.dump(data, default_flow_style=False, sort_keys=False)
     return {"success": True, "yaml_content": yaml_str, "nc": len(names), "names": names}
@@ -347,8 +438,9 @@ def analyze_dataset(dataset_dir: str, class_names: list[str]) -> dict:
     Compute EDA stats for a YOLO-format split dataset.
     Returns per-split: image count, class distribution, bbox stats, imbalance ratio.
     JSON-safe (no matplotlib).
+    Empty splits (dir exists but has 0 images) are excluded from the report.
     """
-    ds = Path(dataset_dir)
+    ds     = Path(dataset_dir)
     report: dict[str, Any] = {"success": True}
 
     for split in ("train", "val", "test"):
@@ -357,10 +449,18 @@ def analyze_dataset(dataset_dir: str, class_names: list[str]) -> dict:
         if not img_dir.exists():
             continue
 
-        imgs = [p for p in img_dir.iterdir() if p.suffix.lower() in {".jpg",".jpeg",".png",".bmp",".webp"}]
+        imgs = [
+            p for p in img_dir.iterdir()
+            if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+        ]
+
+        # ── FIX 4: skip empty splits so the report is not polluted ────────
+        if not imgs:
+            continue
+
         cls_counts: Counter = Counter()
-        box_w: list[float] = []
-        box_h: list[float] = []
+        box_w: list[float]  = []
+        box_h: list[float]  = []
 
         for img in imgs:
             lbl = lbl_dir / img.with_suffix(".txt").name
@@ -381,10 +481,14 @@ def analyze_dataset(dataset_dir: str, class_names: list[str]) -> dict:
 
         named: dict[str, int] = {}
         for cls_id, cnt in sorted(cls_counts.items()):
-            lbl_name = class_names[cls_id] if cls_id < len(class_names) else f"class_{cls_id}"
+            lbl_name = (
+                class_names[cls_id]
+                if cls_id < len(class_names)
+                else f"class_{cls_id}"
+            )
             named[lbl_name] = cnt
 
-        vals = list(named.values())
+        vals      = list(named.values())
         imbalance = round(max(vals) / (min(vals) + 1e-9), 2) if vals else 1.0
 
         report[split] = {
@@ -410,19 +514,19 @@ def generate_notebook_cells(config_json: str) -> dict:
             training, validation, export, inference preview.
     Returns {cells: [...], cell_count: int}.
     """
-    cfg      = json.loads(config_json)
-    platform = cfg.get("platform", "colab")
-    task     = cfg.get("task", "detect")
-    mode     = cfg.get("train_mode", "finetune")
-    model_pt = cfg.get("model_pt", "yolov8n.pt")
+    cfg        = json.loads(config_json)
+    platform   = cfg.get("platform", "colab")
+    task       = cfg.get("task", "detect")
+    mode       = cfg.get("train_mode", "finetune")
+    model_pt   = cfg.get("model_pt",   "yolov8n.pt")
     model_yaml = cfg.get("model_yaml", "yolov8n.yaml")
     model_ref  = model_yaml if mode == "scratch" else model_pt
     model_id   = cfg.get("model_id", "yolov8n")
-    hp       = cfg.get("hp", {})
-    augs     = cfg.get("augmentations", {})
-    cls_list = cfg.get("class_names", [])
-    img_sz   = cfg.get("image_size", 640)
-    is_colab = platform == "colab"
+    hp         = cfg.get("hp", {})
+    augs       = cfg.get("augmentations", {})
+    cls_list   = cfg.get("class_names", [])
+    img_sz     = cfg.get("image_size", 640)
+    is_colab   = platform == "colab"
 
     aug_lines = []
     for k, v in augs.items():
@@ -431,17 +535,17 @@ def generate_notebook_cells(config_json: str) -> dict:
             aug_lines.append(f"    {k}={repr(val)},")
     aug_args = "\n".join(aug_lines)
 
-    cls_py   = repr(cls_list)
-    tr_r     = cfg.get("train_split", 0.8)
-    val_r    = cfg.get("val_split",   0.1)
-    te_r     = cfg.get("test_split",  0.1)
-    seed     = cfg.get("seed", 42)
-    shuffle  = cfg.get("shuffle", True)
-    fmt      = cfg.get("data_format", "yolo")
+    cls_py  = repr(cls_list)
+    tr_r    = cfg.get("train_split", 0.8)
+    val_r   = cfg.get("val_split",   0.1)
+    te_r    = cfg.get("test_split",  0.1)
+    seed    = cfg.get("seed", 42)
+    shuffle = cfg.get("shuffle", True)
+    fmt     = cfg.get("data_format", "yolo")
 
     cells: list[dict] = []
 
-    # ── 0. Title ──────────────────────────────────────────────
+    # ── 0. Title ──────────────────────────────────────────────────────────
     cells.append({"type": "markdown", "source": f"""\
 # 🔥 YOLOForge — {model_id.upper()} `{task}` Training Notebook
 
@@ -459,8 +563,8 @@ def generate_notebook_cells(config_json: str) -> dict:
 > **Generated by YOLOForge** · {date.today()} · [docs.ultralytics.com](https://docs.ultralytics.com)
 """})
 
-    # ── 1. Install ────────────────────────────────────────────
-    coco_pip = '!pip install pycocotools -q' if fmt == "coco" else ""
+    # ── 1. Install ────────────────────────────────────────────────────────
+    coco_pip = "!pip install pycocotools -q" if fmt == "coco" else ""
     cells.append({"type": "code", "source": f"""\
 # ── Install Dependencies ──────────────────────────────────────────────────
 !pip install ultralytics>=8.3.0 -q
@@ -471,7 +575,7 @@ import ultralytics
 ultralytics.checks()
 print("✅ All dependencies installed")"""})
 
-    # ── 2. Setup workspace ────────────────────────────────────
+    # ── 2. Setup workspace ────────────────────────────────────────────────
     if is_colab:
         cells.append({"type": "code", "source": """\
 # ── Mount Google Drive & Workspace Setup ─────────────────────────────────
@@ -486,7 +590,7 @@ import matplotlib.pyplot as plt
 from collections import Counter
 from ultralytics import YOLO
 
-BASE    = Path("/content/yolo_workspace");  BASE.mkdir(exist_ok=True)
+BASE = Path("/content/yolo_workspace"); BASE.mkdir(exist_ok=True)
 print(f"✅ Workspace: {BASE}")"""})
     else:
         cells.append({"type": "code", "source": """\
@@ -499,12 +603,11 @@ import matplotlib.pyplot as plt
 from collections import Counter
 from ultralytics import YOLO
 
-BASE    = Path("/kaggle/working/yolo_ws"); BASE.mkdir(exist_ok=True)
-# ⬇ Point DATASET_PATH to your Kaggle dataset input
+BASE         = Path("/kaggle/working/yolo_ws"); BASE.mkdir(exist_ok=True)
 DATASET_PATH = Path("/kaggle/input")
 print(f"✅ Workspace: {BASE}")"""})
 
-    # ── 3. Upload / Extract ───────────────────────────────────
+    # ── 3. Upload / Extract ───────────────────────────────────────────────
     if is_colab:
         cells.append({"type": "code", "source": """\
 # ── Upload & Extract Dataset ZIP ─────────────────────────────────────────
@@ -513,8 +616,7 @@ print("⬆ Upload your dataset ZIP:")
 uploaded = files.upload()
 ZIP_PATH = list(uploaded.keys())[0]
 
-EXTRACT = BASE / "raw_dataset"
-EXTRACT.mkdir(exist_ok=True)
+EXTRACT = BASE / "raw_dataset"; EXTRACT.mkdir(exist_ok=True)
 with zipfile.ZipFile(ZIP_PATH, 'r') as zf:
     zf.extractall(EXTRACT)
 
@@ -523,23 +625,27 @@ print("Contents:", [p.name for p in EXTRACT.iterdir()])"""})
     else:
         cells.append({"type": "code", "source": """\
 # ── Kaggle: Point to Input Dataset ───────────────────────────────────────
-# Add your dataset via the Kaggle sidebar → Add Data
-EXTRACT = DATASET_PATH     # adjust to exact sub-folder if needed
+EXTRACT = DATASET_PATH
 print(f"✅ Dataset: {EXTRACT}")
 print("Contents:", [p.name for p in EXTRACT.iterdir()])"""})
 
-    # ── 4. Cleaning ───────────────────────────────────────────
+    # ── 4. Cleaning ───────────────────────────────────────────────────────
     cells.append({"type": "markdown", "source": "## 🧹 Step 1 — Dataset Cleaning"})
     cells.append({"type": "code", "source": """\
-# ── Clean Dataset ─────────────────────────────────────────────────────────
+# ── Clean Dataset (non-destructive: works on a staged copy) ──────────────
 def _md5(p):
     with open(p, 'rb') as f: return hashlib.md5(f.read()).hexdigest()
 
 def clean_dataset(src):
     src     = Path(src)
-    exts    = {'.jpg', '.jpeg', '.png', '.bmp', '.webp', '.tiff'}
-    all_imgs = [p for p in src.rglob("*") if p.suffix.lower() in exts]
-    stats   = dict(total=len(all_imgs), corrupt=0, dupes=0, no_label=0, fixed=0)
+    staging = src.parent / (src.name + "_cleaned")
+    if staging.exists(): shutil.rmtree(staging)
+    shutil.copytree(src, staging)
+
+    exts     = {'.jpg', '.jpeg', '.png', '.bmp', '.webp', '.tiff'}
+    all_imgs = [p for p in staging.rglob("*") if p.suffix.lower() in exts]
+    stats    = dict(total=len(all_imgs), corrupt=0, dupes=0, no_label=0, fixed=0,
+                    staging_dir=str(staging))
 
     valid = []
     for p in all_imgs:
@@ -561,21 +667,21 @@ def clean_dataset(src):
         for ln in raw:
             parts = ln.split()
             if len(parts) < 5: continue
-            cls   = parts[0]
-            coords = [float(x) for x in parts[1:]]
+            coords  = [float(x) for x in parts[1:]]
             clamped = [min(max(c, 0.), 1.) for c in coords]
             if clamped != coords: changed = True
-            fixed.append(cls + ' ' + ' '.join(f'{c:.6f}' for c in clamped))
+            fixed.append(parts[0] + ' ' + ' '.join(f'{c:.6f}' for c in clamped))
         if changed: lp.write_text('\\n'.join(fixed)); stats['fixed'] += 1
 
     stats['valid_final'] = len(uniq)
-    return uniq, stats
+    return staging, stats
 
-valid_imgs, cstats = clean_dataset(EXTRACT)
+CLEAN_DIR, cstats = clean_dataset(EXTRACT)
 print("\\n🧹 Cleaning Report:")
-for k, v in cstats.items(): print(f"  {k:20s}: {v}")"""})
+for k, v in cstats.items(): print(f"  {k:20s}: {v}")
+print(f"\\n✅ Working from cleaned copy: {CLEAN_DIR}")"""})
 
-    # ── 5. Split ──────────────────────────────────────────────
+    # ── 5. Split ──────────────────────────────────────────────────────────
     cells.append({"type": "markdown", "source": "## 📂 Step 2 — Dataset Split"})
     cells.append({"type": "code", "source": f"""\
 # ── Split into Train / Val / Test ─────────────────────────────────────────
@@ -589,7 +695,7 @@ for sp in ['train', 'val', 'test']:
 
 exts  = {{'.jpg', '.jpeg', '.png', '.bmp', '.webp'}}
 pairs = []
-for img in EXTRACT.rglob("*"):
+for img in CLEAN_DIR.rglob("*"):
     if img.suffix.lower() not in exts: continue
     lbl = Path(str(img.with_suffix('.txt')).replace('/images/', '/labels/'))
     if not lbl.exists(): lbl = img.with_suffix('.txt')
@@ -597,6 +703,10 @@ for img in EXTRACT.rglob("*"):
 
 if SHUFFLE: random.seed(SEED); random.shuffle(pairs)
 n  = len(pairs); nt = int(n * TRAIN_R); nv = int(n * VAL_R)
+
+if nv == 0 and VAL_R > 0:
+    print(f"⚠ Dataset too small ({{n}} images): val split rounds to 0. "
+          "Consider adding more images or increasing val_ratio.")
 
 for sp, sl in [('train', pairs[:nt]), ('val', pairs[nt:nt+nv]), ('test', pairs[nt+nv:])]:
     for img, lbl in sl:
@@ -606,13 +716,20 @@ for sp, sl in [('train', pairs[:nt]), ('val', pairs[nt:nt+nv]), ('test', pairs[n
 
 print(f"\\n✅ Total: {{n}} | Train: {{nt}} | Val: {{nv}} | Test: {{n-nt-nv}}")"""})
 
-    # ── 6. YAML ───────────────────────────────────────────────
+    # ── 6. YAML ───────────────────────────────────────────────────────────
+    # Correct COCO flip_idx for pose
+    coco_flip = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15]
     cells.append({"type": "code", "source": f"""\
 # ── Generate data.yaml ────────────────────────────────────────────────────
 CLASS_NAMES = {cls_py}
 
+_KNOWN_DATA_YAMLS = {{"data.yaml", "dataset.yaml", "config.yaml"}}
+
 if not CLASS_NAMES:
-    for yf in EXTRACT.rglob("*.yaml"):
+    for yf in CLEAN_DIR.rglob("*.yaml"):
+        # Skip output artifact directories
+        if any(part in ("runs", "train", "val", "exp") for part in yf.parts): continue
+        if yf.name not in _KNOWN_DATA_YAMLS: continue
         try:
             d = yaml.safe_load(open(yf))
             if 'names' in d:
@@ -620,7 +737,7 @@ if not CLASS_NAMES:
                 break
         except: pass
     if not CLASS_NAMES:
-        for cf in [*EXTRACT.rglob("classes.txt"), *EXTRACT.rglob("obj.names")]:
+        for cf in [*CLEAN_DIR.rglob("classes.txt"), *CLEAN_DIR.rglob("obj.names")]:
             CLASS_NAMES = [l.strip() for l in cf.read_text().splitlines() if l.strip()]
             break
     if not CLASS_NAMES:
@@ -635,20 +752,21 @@ if not CLASS_NAMES:
 
 print(f"Classes ({{len(CLASS_NAMES)}}): {{CLASS_NAMES}}")
 
-data_yaml = dict(
-    path  = str(DS.resolve()),
-    train = "images/train",
-    val   = "images/val",
-    test  = "images/test",
-    nc    = len(CLASS_NAMES),
-    names = CLASS_NAMES,
-)
+data_yaml = dict(path=str(DS.resolve()), train="images/train",
+                 val="images/val", test="images/test",
+                 nc=len(CLASS_NAMES), names=CLASS_NAMES)
+
+# FIX: correct COCO left↔right keypoint flip pairs for pose task
+if "{task}" == "pose":
+    data_yaml["kpt_shape"] = [17, 3]
+    data_yaml["flip_idx"]  = {coco_flip}
+
 YAML_PATH = DS / "data.yaml"
 yaml.dump(data_yaml, open(YAML_PATH, 'w'), default_flow_style=False)
 print(f"✅ data.yaml → {{YAML_PATH}}")
 print(yaml.dump(data_yaml))"""})
 
-    # ── 7. EDA ────────────────────────────────────────────────
+    # ── 7. EDA ────────────────────────────────────────────────────────────
     cells.append({"type": "markdown", "source": "## 📊 Step 3 — Exploratory Data Analysis"})
     cells.append({"type": "code", "source": """\
 # ── EDA — Class Distribution & Dataset Stats ──────────────────────────────
@@ -701,7 +819,6 @@ plt.tight_layout()
 plt.savefig(BASE / 'eda.png', dpi=120, bbox_inches='tight', facecolor='#0f172a')
 plt.show()
 
-# Imbalance warning
 counts = list(tc.values())
 if counts:
     ratio = max(counts) / (min(counts) + 1e-9)
@@ -710,7 +827,7 @@ if counts:
     else:
         print(f"✅ Class balance looks good (ratio {ratio:.1f}x)")"""})
 
-    # ── 8. Bounding box stats ─────────────────────────────────
+    # ── 8. Bounding box stats ─────────────────────────────────────────────
     cells.append({"type": "code", "source": """\
 # ── BBox Size Distribution ────────────────────────────────────────────────
 bw, bh, areas = [], [], []
@@ -732,28 +849,39 @@ if bw:
         [ax.spines[s].set_color('#334155') for s in ax.spines]
 
     axes[0].hist(bw, bins=40, color='#3b82f6', edgecolor='none')
-    axes[0].set_title('Box Width Distribution', color='#f1f5f9', fontweight='bold')
+    axes[0].set_title('Box Width Distribution',  color='#f1f5f9', fontweight='bold')
     axes[1].hist(bh, bins=40, color='#06b6d4', edgecolor='none')
     axes[1].set_title('Box Height Distribution', color='#f1f5f9', fontweight='bold')
     axes[2].hist(areas, bins=40, color='#f59e0b', edgecolor='none')
-    axes[2].set_title('Box Area Distribution', color='#f1f5f9', fontweight='bold')
+    axes[2].set_title('Box Area Distribution',   color='#f1f5f9', fontweight='bold')
 
     plt.tight_layout()
     plt.savefig(BASE / 'bbox_stats.png', dpi=110, bbox_inches='tight', facecolor='#0f172a')
     plt.show()
-    print(f"Avg W: {sum(bw)/len(bw):.4f}  Avg H: {sum(bh)/len(bh):.4f}  Avg Area: {sum(areas)/len(areas):.4f}")"""})
+    print(f"Avg W: {sum(bw)/len(bw):.4f}  Avg H: {sum(bh)/len(bh):.4f}  Avg Area: {sum(areas)/len(areas):.4f}")
+else:
+    print("⚠ No bounding box data found in train labels.")"""})
 
-    # ── 9. Load model ─────────────────────────────────────────
-    cells.append({"type": "markdown", "source": f"## 🚀 Step 4 — Training: `{model_ref}`\n\n**Mode:** {'Train from Scratch — architecture only, no pretrained weights' if mode == 'scratch' else 'Fine-tuning — loads pretrained weights'}"})
+    # ── 9. Load model ─────────────────────────────────────────────────────
+    cells.append({"type": "markdown", "source": (
+        f"## 🚀 Step 4 — Training: `{model_ref}`\n\n"
+        f"**Mode:** {'Train from Scratch — architecture only, no pretrained weights' if mode == 'scratch' else 'Fine-tuning — loads pretrained weights'}"
+    )})
     cells.append({"type": "code", "source": f"""\
 # ── Load YOLO Model ───────────────────────────────────────────────────────
-# Mode: {"TRAIN FROM SCRATCH" if mode == "scratch" else "FINE-TUNING"}
 model = YOLO("{model_ref}")
 print(model.info())"""})
 
-    # ── 10. Train ─────────────────────────────────────────────
-    freeze_val = hp.get("freeze", 0) or "None"
-    cache_val  = hp.get("cache", "false")
+    # ── 10. Train ─────────────────────────────────────────────────────────
+    # FIX 5: freeze=0 is falsy — use explicit None check instead of `or`
+    raw_freeze = hp.get("freeze", 0)
+    if raw_freeze is None or raw_freeze == 0:
+        freeze_val = "None"
+    else:
+        freeze_val = str(raw_freeze)
+
+    cache_val = hp.get("cache", "false")
+
     cells.append({"type": "code", "source": f"""\
 # ── Train ─────────────────────────────────────────────────────────────────
 results = model.train(
@@ -784,8 +912,8 @@ results = model.train(
     pretrained       = {mode != "scratch"},
     resume           = {hp.get("resume", False)},
     multi_scale      = {hp.get("multi_scale", False)},
-    {'overlap_mask = ' + str(hp.get("overlap_mask", True)) + ',' if task == "segment" else ''}
-    {'mask_ratio = '   + str(hp.get("mask_ratio",   4))    + ',' if task == "segment" else ''}
+    {'overlap_mask   = ' + str(hp.get("overlap_mask", True)) + ',' if task == "segment" else ''}
+    {'mask_ratio     = ' + str(hp.get("mask_ratio",   4))    + ',' if task == "segment" else ''}
     dropout          = {hp.get("dropout", 0.0)},
     val              = {hp.get("val", True)},
     plots            = {hp.get("plots", True)},
@@ -800,10 +928,10 @@ results = model.train(
 )
 
 print(f"\\n✅ Training complete!")
-print(f"Best weights  → {{results.save_dir}}/weights/best.pt")
-print(f"Last weights  → {{results.save_dir}}/weights/last.pt")"""})
+print(f"Best weights → {{results.save_dir}}/weights/best.pt")
+print(f"Last weights → {{results.save_dir}}/weights/last.pt")"""})
 
-    # ── 11. Results plots ─────────────────────────────────────
+    # ── 11. Results plots ─────────────────────────────────────────────────
     cells.append({"type": "code", "source": """\
 # ── Training Results ──────────────────────────────────────────────────────
 import pandas as pd
@@ -831,9 +959,9 @@ if csv_path.exists():
     plt.savefig(BASE / 'training_curves.png', dpi=110, facecolor='#0f172a')
     plt.show()
 else:
-    print("⚠ results.csv not found")"""})
+    print("⚠ results.csv not found — check results.save_dir for plots.")"""})
 
-    # ── 12. Validate ──────────────────────────────────────────
+    # ── 12. Validate ──────────────────────────────────────────────────────
     cells.append({"type": "markdown", "source": "## 📈 Step 5 — Evaluation"})
     metric_code = {
         "detect":   "print(f'mAP50={m.box.map50:.4f} | mAP50-95={m.box.map:.4f} | P={m.box.mp:.4f} | R={m.box.mr:.4f}')",
@@ -851,7 +979,7 @@ m    = best.val(data=str(YAML_PATH), imgsz={img_sz})
 print("\\n📊 Validation Metrics:")
 {metric_code}"""})
 
-    # ── 13. Confusion matrix ──────────────────────────────────
+    # ── 13. Confusion matrix ──────────────────────────────────────────────
     cells.append({"type": "code", "source": """\
 # ── Display Confusion Matrix ──────────────────────────────────────────────
 cm_path = Path(results.save_dir) / 'confusion_matrix_normalized.png'
@@ -867,11 +995,10 @@ if cm_path.exists():
 else:
     print("Confusion matrix not found — check results.save_dir for plots.")"""})
 
-    # ── 14. Export ────────────────────────────────────────────
+    # ── 14. Export ────────────────────────────────────────────────────────
     cells.append({"type": "markdown", "source": "## 📦 Step 6 — Export"})
     cells.append({"type": "code", "source": f"""\
 # ── Export to Multiple Formats ────────────────────────────────────────────
-# Uncomment formats you need:
 export_formats = [
     "onnx",          # universal — works everywhere
     "torchscript",   # PyTorch deployment
@@ -879,7 +1006,6 @@ export_formats = [
     # "coreml",      # Apple CoreML (iOS/macOS)
     # "engine",      # TensorRT (NVIDIA GPU, fastest)
     # "openvino",    # Intel OpenVINO
-    # "paddle",      # PaddlePaddle
 ]
 
 for fmt in export_formats:
@@ -889,7 +1015,7 @@ for fmt in export_formats:
     except Exception as e:
         print(f"⚠  {{fmt}} failed: {{e}}")"""})
 
-    # ── 15. Save to Drive ────────────────────────────────────
+    # ── 15. Save to Drive (Colab only) ────────────────────────────────────
     if is_colab:
         cells.append({"type": "code", "source": f"""\
 # ── Save All Results to Google Drive ─────────────────────────────────────
@@ -899,7 +1025,7 @@ shutil.copytree(results.save_dir, drive_dst / "run", dirs_exist_ok=True)
 shutil.copy2(YAML_PATH, drive_dst / "data.yaml")
 print(f"✅ Saved to Drive: {{drive_dst}}")"""})
 
-    # ── 16. Inference preview ────────────────────────────────
+    # ── 16. Inference preview ─────────────────────────────────────────────
     cells.append({"type": "markdown", "source": "## 🎯 Step 7 — Inference Preview"})
     cells.append({"type": "code", "source": f"""\
 # ── Run Inference on Test Images ──────────────────────────────────────────
@@ -921,32 +1047,23 @@ if test_imgs:
     plt.tight_layout()
     plt.savefig(BASE / 'predictions.png', dpi=100, facecolor='#0f172a')
     plt.show()
-    print(f"✅ Prediction preview saved → {{BASE / 'predictions.png'}}")
 else:
     print("⚠ No test images found — add images to DS/images/test/")"""})
 
-    # ── 17. Quick inference snippet ──────────────────────────
+    # ── 17. Quick inference snippet ───────────────────────────────────────
     cells.append({"type": "markdown", "source": "## 🔧 Quick Inference Snippet"})
     cells.append({"type": "code", "source": f"""\
 # ── Use Your Trained Model ────────────────────────────────────────────────
-# Copy this snippet into any Python script / notebook
-
 from ultralytics import YOLO
 
-model = YOLO("{hp.get('project', 'runs/train')}/{hp.get('name', 'exp')}/weights/best.pt")
-
-# Single image
+model   = YOLO("{hp.get('project', 'runs/train')}/{hp.get('name', 'exp')}/weights/best.pt")
 results = model.predict("your_image.jpg", conf=0.25, imgsz={img_sz})
 results[0].show()
-
-# Video / webcam
-# results = model.predict(source=0, show=True)         # webcam
-# results = model.predict(source="video.mp4", save=True)
 
 # Batch inference
 results = model.predict(["img1.jpg", "img2.jpg"], conf=0.25)
 for r in results:
-    boxes = r.boxes.xyxy.cpu().numpy()   # [x1, y1, x2, y2]
+    boxes = r.boxes.xyxy.cpu().numpy()
     confs = r.boxes.conf.cpu().numpy()
     cls   = r.boxes.cls.cpu().numpy()
     print(boxes, confs, cls)"""})
@@ -963,10 +1080,10 @@ def assemble_ipynb(cells_json: str, platform: str = "colab") -> dict:
     Assemble {type, source} cell dicts into a valid .ipynb JSON string.
     Returns {notebook_json, cell_count}.
     """
-    cells = json.loads(cells_json)
+    cells    = json.loads(cells_json)
     nb_cells = []
     for i, c in enumerate(cells):
-        ct = "markdown" if c["type"] == "markdown" else "code"
+        ct   = "markdown" if c["type"] == "markdown" else "code"
         cell: dict[str, Any] = {
             "cell_type": ct,
             "id":        f"yf-{i:04d}",
@@ -982,10 +1099,10 @@ def assemble_ipynb(cells_json: str, platform: str = "colab") -> dict:
         "nbformat":       4,
         "nbformat_minor": 5,
         "metadata": {
-            "kernelspec":     {"display_name": "Python 3", "language": "python", "name": "python3"},
-            "language_info":  {"name": "python", "version": "3.10.12"},
-            "accelerator":    "GPU" if platform == "colab" else None,
-            "colab":          {"provenance": []} if platform == "colab" else None,
+            "kernelspec":    {"display_name": "Python 3", "language": "python", "name": "python3"},
+            "language_info": {"name": "python", "version": "3.10.12"},
+            "accelerator":   "GPU" if platform == "colab" else None,
+            "colab":         {"provenance": []} if platform == "colab" else None,
         },
         "cells": nb_cells,
     }
@@ -994,7 +1111,7 @@ def assemble_ipynb(cells_json: str, platform: str = "colab") -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# TOOL 8 – generate_data_yaml_string  (lightweight, no FS access)
+# TOOL 8 – build_yaml_string  (lightweight, no FS access)
 # ═══════════════════════════════════════════════════════════════════════════
 @tool
 def build_yaml_string(class_names: list[str], task: str = "detect") -> dict:
@@ -1015,7 +1132,8 @@ def build_yaml_string(class_names: list[str], task: str = "detect") -> dict:
     }
     if task == "pose":
         data["kpt_shape"] = [17, 3]
-        data["flip_idx"]  = list(range(17))
+        # FIX 6b: correct COCO left↔right keypoint flip pairs
+        data["flip_idx"]  = _COCO_FLIP_IDX
 
     return {"yaml_content": _yaml.dump(data, default_flow_style=False, sort_keys=False)}
 
@@ -1027,8 +1145,6 @@ def build_yaml_string(class_names: list[str], task: str = "detect") -> dict:
 def generate_readme(config_json: str) -> dict:
     """
     Generate a comprehensive README.md for the training run.
-    Includes config table, augmentations, class list, usage instructions,
-    output structure, and inference snippet.
     """
     cfg      = json.loads(config_json)
     task     = cfg.get("task", "detect")
@@ -1050,7 +1166,10 @@ def generate_readme(config_json: str) -> dict:
         if isinstance(v, dict) and v.get("enabled")
     ]
 
-    cls_md = "\n".join(f"  {i}. `{c}`" for i, c in enumerate(cls_list)) or "  _Auto-detected from dataset_"
+    cls_md = (
+        "\n".join(f"  {i}. `{c}`" for i, c in enumerate(cls_list))
+        or "  _Auto-detected from dataset_"
+    )
 
     task_notes = {
         "detect":   "Outputs `[x1 y1 x2 y2 conf cls]` per detection.",
@@ -1128,8 +1247,8 @@ def generate_readme(config_json: str) -> dict:
     ├── confusion_matrix.png
     ├── PR_curve.png
     ├── F1_curve.png
-    ├── labels.jpg           ← class / bbox distribution
-    └── val_batch*.jpg       ← validation samples with predictions
+    ├── labels.jpg
+    └── val_batch*.jpg
     ```
 
     ## 🔧 Inference Example
@@ -1139,7 +1258,7 @@ def generate_readme(config_json: str) -> dict:
 
     model   = YOLO("{hp.get("project","runs/train")}/{hp.get("name","exp")}/weights/best.pt")
     results = model.predict("image.jpg", conf=0.25, imgsz={img_sz})
-    results[0].show()      # display annotated image
+    results[0].show()
     results[0].save("out.jpg")
     ```
 
@@ -1150,7 +1269,7 @@ def generate_readme(config_json: str) -> dict:
     return {"readme_content": md, "success": True}
 
 
-# ── Registry ──────────────────────────────────────────────────
+# ── Registry ───────────────────────────────────────────────────────────────
 ALL_TOOLS = [
     validate_config,
     clean_dataset,

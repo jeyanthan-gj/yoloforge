@@ -1,14 +1,25 @@
 """
 YOLOForge – LangGraph StateGraph Pipeline
-Each node calls a @tool directly. No LLM needed — deterministic, fast.
+
+Fixes applied:
+  1. dataset_path added to PipelineState TypedDict (was missing, caused type errors
+     and a false sense of safety around the injected field).
+  2. node_split now RETURNS dataset_path in its patch dict instead of mutating
+     state in-place (LangGraph ignores in-place mutations; only returned dicts
+     are merged into state).  node_eda therefore receives the correct split output
+     directory rather than the original pre-split upload path.
+  3. node_clean returns the staging_dir from clean_dataset so downstream nodes
+     use the cleaned copy, not the original source.
+  4. split_report warnings are surfaced into pipeline messages.
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 from langgraph.graph import END, START, StateGraph
+from typing_extensions import TypedDict
 
 from tools.yolo_tools import (
     analyze_dataset,
@@ -20,18 +31,41 @@ from tools.yolo_tools import (
     split_dataset,
     validate_config,
 )
-from utils.schemas import PipelineState
 
 
-# ─── Helper ────────────────────────────────────────────────────
+# ─── Helper ────────────────────────────────────────────────────────────────
 def _call(tool_fn, **kwargs) -> dict:
     """Invoke a LangChain @tool synchronously."""
     return tool_fn.invoke(kwargs)
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
+# STATE  (FIX 1: dataset_path declared in TypedDict)
+# ═══════════════════════════════════════════════════════════════════════════
+class PipelineState(TypedDict):
+    config:           dict
+    # optional uploaded-dataset path — injected by run_pipeline, updated by nodes
+    dataset_path:     Optional[str]          # ← FIX 1: was missing from TypedDict
+    # tool results
+    validation:       Optional[dict]
+    cleaning_report:  Optional[dict]
+    split_report:     Optional[dict]
+    yaml_content:     Optional[str]
+    eda_report:       Optional[dict]
+    notebook_cells:   Optional[list]
+    notebook_json:    Optional[str]
+    data_yaml:        Optional[str]
+    readme_md:        Optional[str]
+    # control
+    messages:         list[str]
+    errors:           list[str]
+    completed:        list[str]
+    current:          str
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # NODE FUNCTIONS
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
 
 def node_validate(state: PipelineState) -> dict:
     cfg_json = json.dumps(state["config"])
@@ -46,45 +80,52 @@ def node_validate(state: PipelineState) -> dict:
     for e in result.get("errors",      []): errs.append(f"CONFIG: {e}")
 
     return {
-        "validation":  result,
-        "messages":    msgs,
-        "errors":      errs,
-        "current":     "validate",
-        "completed":   state.get("completed", []) + ["validate"],
+        "validation": result,
+        "messages":   msgs,
+        "errors":     errs,
+        "current":    "validate",
+        "completed":  state.get("completed", []) + ["validate"],
     }
 
 
 def node_clean(state: PipelineState) -> dict:
     msgs = list(state.get("messages", []))
     errs = list(state.get("errors",   []))
-    ds   = state.get("dataset_path")          # injected externally if uploaded
+    ds   = state.get("dataset_path")
 
     if not ds or not Path(ds).exists():
         msgs.append("ℹ No dataset uploaded — cleaning embedded in notebook")
         return {
             "cleaning_report": {"skipped": True},
-            "messages": msgs, "errors": errs,
-            "current": "clean",
+            "messages":  msgs,
+            "errors":    errs,
+            "current":   "clean",
             "completed": state.get("completed", []) + ["clean"],
         }
 
     msgs.append(f"🧹 Cleaning dataset at {ds}")
     result = _call(clean_dataset, dataset_dir=ds)
 
-    if result.get("success"):
+    # FIX 2a: propagate the staging_dir so downstream nodes use the cleaned copy
+    new_dataset_path = state.get("dataset_path")
+    if result.get("success") and result.get("staging_dir"):
+        new_dataset_path = result["staging_dir"]
         msgs.append(
             f"  ✅ {result['valid_final']} valid images "
             f"({result['corrupt']} corrupt, {result['duplicates']} dupes, "
             f"{result['labels_fixed']} labels fixed)"
         )
+        msgs.append(f"  📁 Working from cleaned copy: {new_dataset_path}")
     else:
         errs.append(f"CLEAN: {result.get('error', 'unknown')}")
 
     return {
         "cleaning_report": result,
-        "messages": msgs, "errors": errs,
-        "current": "clean",
-        "completed": state.get("completed", []) + ["clean"],
+        "dataset_path":    new_dataset_path,   # ← propagate staging dir
+        "messages":        msgs,
+        "errors":          errs,
+        "current":         "clean",
+        "completed":       state.get("completed", []) + ["clean"],
     }
 
 
@@ -97,14 +138,16 @@ def node_split(state: PipelineState) -> dict:
     if not ds or not Path(ds).exists():
         msgs.append("ℹ No dataset — splitting embedded in notebook")
         return {
-            "split_report": {"skipped": True},
-            "messages": msgs, "errors": errs,
-            "current": "split",
-            "completed": state.get("completed", []) + ["split"],
+            "split_report":  {"skipped": True},
+            "messages":      msgs,
+            "errors":        errs,
+            "current":       "split",
+            "completed":     state.get("completed", []) + ["split"],
         }
 
     out_dir = str(Path(ds).parent / "split")
     msgs.append(f"📂 Splitting → {out_dir}")
+
     result = _call(
         split_dataset,
         source_dir  = ds,
@@ -116,17 +159,28 @@ def node_split(state: PipelineState) -> dict:
         seed        = cfg.get("seed", 42),
     )
 
+    # FIX 3: surface split warnings into pipeline messages
+    for w in result.get("warnings", []):
+        msgs.append(f"  ⚠ {w}")
+
+    # FIX 2b: RETURN updated dataset_path in the patch dict instead of
+    # mutating state in-place (LangGraph ignores in-place mutations).
+    new_dataset_path = state.get("dataset_path")
     if result.get("success"):
-        msgs.append(f"  ✅ Train {result['train']} | Val {result['val']} | Test {result['test']}")
-        state["dataset_path"] = result["output_dir"]
+        new_dataset_path = result["output_dir"]
+        msgs.append(
+            f"  ✅ Train {result['train']} | Val {result['val']} | Test {result['test']}"
+        )
     else:
         errs.append(f"SPLIT: {result.get('error')}")
 
     return {
-        "split_report": result,
-        "messages": msgs, "errors": errs,
-        "current": "split",
-        "completed": state.get("completed", []) + ["split"],
+        "split_report":  result,
+        "dataset_path":  new_dataset_path,   # ← FIX: returned in patch, not mutated
+        "messages":      msgs,
+        "errors":        errs,
+        "current":       "split",
+        "completed":     state.get("completed", []) + ["split"],
     }
 
 
@@ -134,15 +188,15 @@ def node_eda(state: PipelineState) -> dict:
     msgs = list(state.get("messages", []))
     errs = list(state.get("errors",   []))
     cfg  = state["config"]
-    ds   = state.get("dataset_path")
+    ds   = state.get("dataset_path")          # now correctly points to split output
     spl  = state.get("split_report", {})
 
     if ds and spl and not spl.get("skipped") and Path(ds).exists():
         msgs.append("📊 Running EDA")
         result = _call(
             analyze_dataset,
-            dataset_dir  = ds,
-            class_names  = cfg.get("class_names", []),
+            dataset_dir = ds,
+            class_names = cfg.get("class_names", []),
         )
         if result.get("success") and result.get("train"):
             tr = result["train"]
@@ -153,15 +207,22 @@ def node_eda(state: PipelineState) -> dict:
             )
             if tr["imbalance_ratio"] > 10:
                 msgs.append("  ⚠ High class imbalance — consider oversampling")
+        # Warn about any empty splits that were excluded from the report
+        for split in ("val", "test"):
+            if split not in result and spl.get(split, 0) == 0:
+                msgs.append(
+                    f"  ℹ {split} split has 0 images — excluded from EDA report"
+                )
     else:
         msgs.append("ℹ No dataset — EDA embedded in notebook")
         result = {"skipped": True}
 
     return {
         "eda_report": result,
-        "messages": msgs, "errors": errs,
-        "current": "eda",
-        "completed": state.get("completed", []) + ["eda"],
+        "messages":   msgs,
+        "errors":     errs,
+        "current":    "eda",
+        "completed":  state.get("completed", []) + ["eda"],
     }
 
 
@@ -179,7 +240,8 @@ def node_yaml(state: PipelineState) -> dict:
 
     return {
         "data_yaml": result.get("yaml_content", ""),
-        "messages":  msgs, "errors": errs,
+        "messages":  msgs,
+        "errors":    errs,
         "current":   "yaml",
         "completed": state.get("completed", []) + ["yaml"],
     }
@@ -196,8 +258,9 @@ def node_notebook(state: PipelineState) -> dict:
     if not cells_result.get("success"):
         errs.append("NOTEBOOK: cell generation failed")
         return {
-            "messages": msgs, "errors": errs,
-            "current": "notebook",
+            "messages":  msgs,
+            "errors":    errs,
+            "current":   "notebook",
             "completed": state.get("completed", []) + ["notebook"],
         }
 
@@ -216,9 +279,10 @@ def node_notebook(state: PipelineState) -> dict:
     return {
         "notebook_cells": cells,
         "notebook_json":  nb_json,
-        "messages": msgs, "errors": errs,
-        "current": "notebook",
-        "completed": state.get("completed", []) + ["notebook"],
+        "messages":       msgs,
+        "errors":         errs,
+        "current":        "notebook",
+        "completed":      state.get("completed", []) + ["notebook"],
     }
 
 
@@ -233,7 +297,8 @@ def node_readme(state: PipelineState) -> dict:
 
     return {
         "readme_md": result.get("readme_content", ""),
-        "messages":  msgs, "errors": errs,
+        "messages":  msgs,
+        "errors":    errs,
         "current":   "readme",
         "completed": state.get("completed", []) + ["readme"],
     }
@@ -247,14 +312,14 @@ def node_abort(state: PipelineState) -> dict:
     return {"messages": msgs, "current": "abort"}
 
 
-# ─── Conditional routing ────────────────────────────────────────
+# ─── Conditional routing ────────────────────────────────────────────────────
 def route_after_validate(state: PipelineState) -> Literal["clean", "abort"]:
     return "abort" if state.get("errors") else "clean"
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
 # BUILD GRAPH
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
 def build_graph():
     g = StateGraph(PipelineState)
 
@@ -292,6 +357,7 @@ def run_pipeline(config: dict, dataset_path: str | None = None) -> dict:
     """Execute the full LangGraph pipeline. Returns final state."""
     init: PipelineState = {
         "config":          config,
+        "dataset_path":    dataset_path,   # now properly typed in PipelineState
         "validation":      None,
         "cleaning_report": None,
         "split_report":    None,
@@ -305,6 +371,5 @@ def run_pipeline(config: dict, dataset_path: str | None = None) -> dict:
         "errors":          [],
         "completed":       [],
         "current":         "init",
-        "dataset_path":    dataset_path,   # type: ignore[typeddict-item]
     }
     return _graph.invoke(init)
