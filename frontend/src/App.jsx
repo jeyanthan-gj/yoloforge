@@ -1,5 +1,16 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
+// ── Responsive helper ──────────────────────────────────────────────────────
+function useIsMobile(bp = 768) {
+  const [mobile, setMobile] = useState(() => typeof window !== "undefined" && window.innerWidth <= bp);
+  useEffect(() => {
+    const fn = () => setMobile(window.innerWidth <= bp);
+    window.addEventListener("resize", fn);
+    return () => window.removeEventListener("resize", fn);
+  }, [bp]);
+  return mobile;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════════════
@@ -396,6 +407,7 @@ function applyAugs(srcCanvas, params) {
 // AUGMENTATION PREVIEW COMPONENT
 // ═══════════════════════════════════════════════════════════════════════════
 function AugPreview({ augVals, onAugChange }) {
+  const isMobile = useIsMobile();
   const [scene, setScene] = useState("street");
   const [grp, setGrp] = useState("🎨 Color");
   const srcRef = useRef(null);
@@ -481,7 +493,7 @@ function AugPreview({ augVals, onAugChange }) {
         ))}
       </div>
 
-      <div style={{display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24, marginBottom: 32}}>
+      <div style={{display: "grid", gridTemplateColumns: col2, gap: 24, marginBottom: 32}}>
         {groupItems.map(p => {
           const val = augVals?.[p.k] ?? p.def;
           const pct = ((val - p.min) / (p.max - p.min)) * 100;
@@ -593,6 +605,8 @@ const dl=(content,name,type="application/json")=>{const a=Object.assign(document
 // MAIN APP
 // ═══════════════════════════════════════════════════════════════════════════
 export default function App() {
+  const isMobile = useIsMobile();
+  const col2 = isMobile ? "1fr" : "1fr 1fr";
   const [step,  setStep]  = useState(0);
   const [task,  setTask]  = useState(null);
   const [model, setMdl]   = useState(null);
@@ -685,7 +699,7 @@ body { font-family: var(--font-main); color: var(--text-primary); line-height: 1
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 10px; }
 
-.wrap { max-width: 1400px; margin: 0 auto; padding: 0 40px 120px; }
+.wrap { max-width: 1400px; margin: 0 auto; padding: 0 40px 140px; }
 
 .hdr { background: rgba(255, 255, 255, 0.5); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); border-bottom: 1px solid rgba(217, 70, 168, 0.1); padding: 0 24px; position: sticky; top: 0; z-index: 1000; }
 .hdr-in { max-width: 1200px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; height: 72px; }
@@ -780,11 +794,56 @@ input:focus, select:focus { border-color: var(--accent-primary); background: whi
 .st2 code { font-family: var(--font-mono); background: var(--bg-tertiary); padding: 2px 6px; border-radius: 4px; font-size: 13px; color: var(--accent-primary); }
 .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-family: var(--font-mono); font-size: 11px; background: var(--bg-secondary); color: var(--text-secondary); border: 1px solid var(--border-color); }
 
+@media (max-width: 1024px) {
+  .wrap { padding: 0 24px 120px; }
+  .bento-grid { grid-template-columns: 1fr !important; gap: 16px; }
+  .bento-card[style*="span 8"], .bento-card[style*="span 4"] { grid-column: span 1 !important; }
+  .hdr-in { padding: 0 8px; }
+}
+
 @media (max-width: 768px) {
-  .hero { padding: 60px 0 40px; }
-  .hero h1 { font-size: 2.2rem; }
-  .card { padding: 20px; }
+  .hero { padding: 60px 16px 40px; }
+  .hero h1 { font-size: 2.2rem; letter-spacing: -1px; }
+  .hero p { font-size: 1rem; }
+  .card { padding: 16px; }
+  .tgrid { grid-template-columns: 1fr 1fr; }
+  .wrap { padding: 0 16px 120px; }
+  .hdr { padding: 0 16px; }
+  .hdr-in { height: 60px; }
+  .logo-name { font-size: 1.1rem; }
+  .sbar { max-width: 100%; overflow-x: auto; flex-wrap: nowrap; }
+  .sit { padding: 8px 12px; font-size: 12px; white-space: nowrap; }
+  .sit-n { display: none; }
+  .nb { bottom: 16px; width: calc(100% - 32px); padding: 10px 16px; border-radius: 16px; }
+  .nb-in { gap: 8px; }
+  .btn { padding: 10px 16px; font-size: 13px; }
+  .btn-gen { font-size: 14px; padding: 14px; }
+  .bento-card { padding: 20px; border-radius: 20px; }
+  .sgrid { grid-template-columns: repeat(2, 1fr); }
+  .mdet-stats { gap: 12px; }
+  .ftabs { gap: 6px; }
+  .ftab { padding: 8px 14px; font-size: 12px; }
+  .gtab { font-size: 11px; padding: 8px 4px; }
+  .spleg { flex-wrap: wrap; gap: 12px; }
+  .clsrow { flex-direction: column; gap: 8px; }
+  .clsrow .btn { width: 100%; border-radius: 12px !important; }
+  .dlrow { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .dlrow .btn { width: 100%; }
+  .logbox { font-size: 11px; }
+  .code { font-size: 11px; max-height: 280px; }
+  .otabs { gap: 6px; }
+  .otab { padding: 6px 12px; font-size: 12px; }
+}
+
+@media (max-width: 480px) {
+  .hero h1 { font-size: 1.8rem; }
   .tgrid { grid-template-columns: 1fr; }
+  .sgrid { grid-template-columns: 1fr 1fr; }
+  .bento-card { padding: 16px; border-radius: 16px; }
+  .sbar { padding: 4px; }
+  .sit { padding: 6px 10px; font-size: 11px; }
+  .hd { font-size: 11px; }
+  .lbl { font-size: 11px; }
 }
   
 /* Dataset & Custom Components */
@@ -855,7 +914,7 @@ input:focus, select:focus { border-color: var(--accent-primary); background: whi
   // ── STEP CONTENT ───────────────────────────────────────────────────────
   const stepContent=[
     // STEP 0 — Task & Model
-    <div key="s0" style={{display: "grid", gridTemplateColumns: task ? "1fr 1fr" : "1fr", gap: 32, alignItems: "start"}}>
+    <div key="s0" style={{display: "grid", gridTemplateColumns: task && !isMobile ? "1fr 1fr" : "1fr", gap: isMobile ? 16 : 32, alignItems: "start"}}>
       <div>
         <div className="hd">Select Task</div>
         <div className="tgrid">
@@ -896,7 +955,7 @@ input:focus, select:focus { border-color: var(--accent-primary); background: whi
               
               <div style={{marginTop: 32}}>
                 <div className="hd">Training Strategy</div>
-                <div style={{display:"grid", gridTemplateColumns: "1fr 1fr", gap: 16}}>
+                <div style={{display:"grid", gridTemplateColumns: col2, gap: 16}}>
                   {[
                     ["finetune", "🎯 Fine-tune", `Recommended. Starts with ${model.pt} weights.`, true],
                     ["scratch", "⚡ From Scratch", model.y ? `Uses ${model.y} architecture.` : "Not available for this model.", !!model.y]
@@ -923,7 +982,7 @@ input:focus, select:focus { border-color: var(--accent-primary); background: whi
     </div>,
 
     // STEP 1 — Dataset
-    <div key="s1" style={{display: "grid", gridTemplateColumns: "1fr 1fr", gap: 32, alignItems: "start"}}>
+    <div key="s1" style={{display: "grid", gridTemplateColumns: col2, gap: isMobile ? 16 : 32, alignItems: "start"}}>
       <div style={{display: "flex", flexDirection: "column", gap: 32}}>
         <div>
           <div className="hd">Dataset Specification</div>
@@ -1021,7 +1080,7 @@ input:focus, select:focus { border-color: var(--accent-primary); background: whi
              </div>
           </div>
 
-          <div style={{display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginTop: 24}}>
+          <div style={{display: "grid", gridTemplateColumns: col2, gap: 20, marginTop: 24}}>
             <div className="field">
               <label className="lbl">Input Resolution</label>
               <select value={imgSz} onChange={e => setImgSz(+e.target.value)}>
@@ -1058,12 +1117,12 @@ input:focus, select:focus { border-color: var(--accent-primary); background: whi
     </div>,
 
     // STEP 3 — Hyperparameters
-    <div key="s3" style={{display: "grid", gridTemplateColumns: "1fr 1fr", gap: 32, alignItems: "start"}}>
+    <div key="s3" style={{display: "grid", gridTemplateColumns: col2, gap: isMobile ? 16 : 32, alignItems: "start"}}>
       <div style={{display: "flex", flexDirection: "column", gap: 32}}>
         <div>
           <div className="hd">Core Parameters</div>
           <div className="card" style={{marginBottom: 0}}>
-            <div style={{display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24, marginBottom: 24}}>
+            <div style={{display: "grid", gridTemplateColumns: col2, gap: 24, marginBottom: 24}}>
               <div className="field"><label className="lbl">Training Epochs</label><input type="number" value={hp.epochs} min={1} max={1000} onChange={e => sH("epochs", +e.target.value)} /></div>
               <div className="field">
                 <label className="lbl">Batch Selection</label>
@@ -1072,7 +1131,7 @@ input:focus, select:focus { border-color: var(--accent-primary); background: whi
                 </select>
               </div>
             </div>
-            <div style={{display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24}}>
+            <div style={{display: "grid", gridTemplateColumns: col2, gap: 24}}>
               <div className="field"><label className="lbl">Early Stopping</label><input type="number" value={hp.patience} min={0} max={300} onChange={e => sH("patience", +e.target.value)} /></div>
               <div className="field">
                 <label className="lbl">Computing Device</label>
@@ -1088,7 +1147,7 @@ input:focus, select:focus { border-color: var(--accent-primary); background: whi
         <div>
           <div className="hd">Optimization & Schedulers</div>
           <div className="card" style={{marginBottom: 0}}>
-            <div style={{display: "grid", gridTemplateColumns: "1fr 1fr", gap: 32, marginBottom: 16}}>
+            <div style={{display: "grid", gridTemplateColumns: col2, gap: 32, marginBottom: 16}}>
               <Sl label="Learning Rate" hint="lr0" min={0.0001} max={0.1} step={0.0001} vk="lr0" dec={4} />
               <Sl label="Warmup Phases" hint="epochs" min={0} max={10} step={0.5} vk="warmup_epochs" dec={1} />
             </div>
@@ -1104,11 +1163,11 @@ input:focus, select:focus { border-color: var(--accent-primary); background: whi
         <div>
           <div className="hd">Regularization & Loss</div>
           <div className="card" style={{marginBottom: 0}}>
-            <div style={{display: "grid", gridTemplateColumns: "1fr 1fr", gap: 32, marginBottom: 24}}>
+            <div style={{display: "grid", gridTemplateColumns: col2, gap: 32, marginBottom: 24}}>
               <Sl label="Momentum" min={0.6} max={0.98} step={0.001} vk="momentum" dec={3} />
               <Sl label="Weight Decay" min={0} max={0.001} step={0.00001} vk="weight_decay" dec={5} />
             </div>
-            <div style={{display: "grid", gridTemplateColumns: "1fr 1fr", gap: 32}}>
+            <div style={{display: "grid", gridTemplateColumns: col2, gap: 32}}>
               <Sl label="Box Loss Gain" min={0.5} max={20} step={0.5} vk="box" dec={1} />
               <Sl label="Class Loss Gain" min={0.1} max={5} step={0.1} vk="cls" dec={1} />
             </div>
@@ -1118,7 +1177,7 @@ input:focus, select:focus { border-color: var(--accent-primary); background: whi
         <div>
           <div className="hd">Advanced Controls</div>
           <div className="card" style={{marginBottom: 0}}>
-            <div style={{display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24, marginBottom: 24}}>
+            <div style={{display: "grid", gridTemplateColumns: col2, gap: 24, marginBottom: 24}}>
               <div className="field"><label className="lbl">Mosaic Closure</label><input type="number" value={hp.close_mosaic} min={0} max={100} onChange={e => sH("close_mosaic", +e.target.value)} /></div>
               <div className="field"><label className="lbl">Autosave Int.</label><input type="number" value={hp.save_period} min={-1} max={100} onChange={e => sH("save_period", +e.target.value)} /></div>
             </div>
@@ -1140,7 +1199,7 @@ input:focus, select:focus { border-color: var(--accent-primary); background: whi
       {backOk === false && <div className="warn" style={{marginBottom: 32}}>⚠ Backend not connected at {API} — offline mode. Configuration will be downloaded locally.</div>}
 
 
-      <div style={{display: "grid", gridTemplateColumns: "1fr 1fr", gap: 32, alignItems: "start"}}>
+      <div style={{display: "grid", gridTemplateColumns: col2, gap: isMobile ? 16 : 32, alignItems: "start"}}>
         <div>
           <div className="hd">Pipeline Blueprint</div>
           <div className="card" style={{marginBottom: 0}}>
@@ -1302,7 +1361,7 @@ input:focus, select:focus { border-color: var(--accent-primary); background: whi
             <button className="btn btn-p" onClick={() => setStarted(true)} style={{padding: "20px 60px", fontSize: 20, borderRadius: 100, boxShadow: "0 20px 40px rgba(217, 70, 168, 0.25)"}}>
               Get Started — Forging v2.0
             </button>
-            <div style={{marginTop: 24, display: "flex", gap: 32, justifyContent: "center", color: "rgba(255,255,255,0.7)", fontSize: 14, fontWeight: 600}}>
+            <div style={{marginTop: 24, display: "flex", gap: isMobile ? 16 : 32, justifyContent: "center", color: "rgba(255,255,255,0.7)", fontSize: isMobile ? 12 : 14, fontWeight: 600, flexWrap: "wrap"}}>
                <span>✓ 5-Step Pipeline</span>
                <span>✓ 10+ Architectures</span>
                <span>✓ Live Simulator</span>
@@ -1312,27 +1371,27 @@ input:focus, select:focus { border-color: var(--accent-primary); background: whi
       ) : (
         <>
           {/* Progress Header */}
-          <div style={{textAlign:"center", paddingTop: 120, paddingBottom: 60, position: "relative", zIndex: 1}}>
-             <div className="sbar" style={{margin: "0 auto"}}>
+          <div style={{textAlign:"center", paddingTop: isMobile ? 80 : 120, paddingBottom: isMobile ? 32 : 60, position: "relative", zIndex: 1}}>
+             <div className="sbar" style={{margin: "0 auto", overflowX: "auto"}}>
                 {STEPS.map((s, i) => (
                   <div key={s} className={`sit${step === i ? " act" : ""}${step > i ? " done" : ""}`} onClick={() => setStep(i)}>
-                    <span className="sit-n">0{i + 1}</span> {s}
+                    {!isMobile && <span className="sit-n">0{i + 1}</span>} {isMobile ? s.split(" ")[0] : s}
                   </div>
                 ))}
               </div>
           </div>
 
           {/* Main Content with Bento Grid */}
-          <main className="wrap" style={{paddingTop: 80, position: "relative", zIndex: 1}}>
-            <div className="bento-grid">
+          <main className="wrap" style={{paddingTop: isMobile ? 40 : 80, position: "relative", zIndex: 1}}>
+            <div className="bento-grid" style={{display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(12, 1fr)", gap: isMobile ? 16 : 24}}>
               {/* Main Config Card */}
-              <div className="bento-card" style={{gridColumn: "span 8"}}>
+              <div className="bento-card" style={{gridColumn: isMobile ? "span 1" : "span 8"}}>
                 {stepContent[step]}
               </div>
 
               {/* Sidebar Area */}
-              <div style={{gridColumn: "span 4", display: "flex", flexDirection: "column", gap: 16}}>
-                <div className="bento-card" style={{padding: 20}}>
+              <div style={{gridColumn: isMobile ? "span 1" : "span 4", display: "flex", flexDirection: isMobile ? "row" : "column", gap: 16, flexWrap: isMobile ? "wrap" : "nowrap"}}>
+                <div className="bento-card" style={{padding: 20, flex: isMobile ? "1 1 calc(50% - 8px)" : "none", minWidth: isMobile ? "calc(50% - 8px)" : "auto"}}>
                   <div className="hd" style={{marginBottom: 16, fontSize: 11}}>Model Context</div>
                   <div style={{display:"flex",flexDirection:"column",gap:12}}>
                     <div style={{display:"flex",justifyContent:"space-between",fontSize:13}}>
@@ -1350,7 +1409,7 @@ input:focus, select:focus { border-color: var(--accent-primary); background: whi
                   </div>
                 </div>
 
-                <div className="bento-card" style={{padding: 20}}>
+                <div className="bento-card" style={{padding: 20, flex: isMobile ? "1 1 calc(50% - 8px)" : "none", minWidth: isMobile ? "calc(50% - 8px)" : "auto"}}>
                   <div className="hd" style={{marginBottom: 16, fontSize: 11}}>Data & Vision</div>
                   <div style={{display:"flex",flexDirection:"column",gap:12}}>
                     <div style={{display:"flex",justifyContent:"space-between",fontSize:13}}>
@@ -1368,7 +1427,7 @@ input:focus, select:focus { border-color: var(--accent-primary); background: whi
                   </div>
                 </div>
 
-                <div className="bento-card" style={{padding: 20}}>
+                <div className="bento-card" style={{padding: 20, flex: isMobile ? "1 1 calc(50% - 8px)" : "none", minWidth: isMobile ? "calc(50% - 8px)" : "auto"}}>
                   <div className="hd" style={{marginBottom: 16, fontSize: 11}}>Training Params</div>
                   <div style={{display:"flex",flexDirection:"column",gap:12}}>
                     <div style={{display:"flex",justifyContent:"space-between",fontSize:13}}>
@@ -1392,22 +1451,22 @@ input:focus, select:focus { border-color: var(--accent-primary); background: whi
           {/* Persistent Navigation bar */}
           <nav className="nb">
             <div className="nb-in">
-              <div style={{display: "flex", gap: 12}}>
+              <div style={{display: "flex", gap: 8}}>
                 <button className="btn btn-g" disabled={step === 0} onClick={() => setStep(s => s - 1)}>
-                  ← Back
+                  ← {!isMobile && "Back"}
                 </button>
                 {step < 4 ? (
                   <button className="btn btn-g" onClick={() => setStep(s => s + 1)}>
-                    Next →
+                    {!isMobile && "Next"} →
                   </button>
                 ) : (
-                  <button className="btn btn-gen" onClick={handleGenerate} disabled={loading || !task || !model} style={{boxShadow: "0 10px 25px rgba(217, 70, 168, 0.2)"}}>
-                    {loading ? <><span className="spin"/>Forging Pipeline...</> : "Generate Configuration ⚡"}
+                  <button className="btn btn-gen" onClick={handleGenerate} disabled={loading || !task || !model} style={{boxShadow: "0 10px 25px rgba(217, 70, 168, 0.2)", padding: isMobile ? "12px 16px" : undefined, fontSize: isMobile ? 13 : undefined}}>
+                    {loading ? <><span className="spin"/>Forging...</> : isMobile ? "Generate ⚡" : "Generate Configuration ⚡"}
                   </button>
                 )}
               </div>
-              <div style={{display: "flex", gap: 20, alignItems: "center"}}>
-                 <span style={{fontSize: 12, fontWeight: 700, color: "var(--text-tertiary)"}}>PHASE {step + 1} OF 5</span>
+              <div style={{display: "flex", gap: isMobile ? 8 : 20, alignItems: "center"}}>
+                 <span style={{fontSize: isMobile ? 10 : 12, fontWeight: 700, color: "var(--text-tertiary)"}}>{isMobile ? `${step+1}/5` : `PHASE ${step + 1} OF 5`}</span>
               </div>
             </div>
           </nav>
