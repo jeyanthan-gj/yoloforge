@@ -451,9 +451,9 @@ function AugPreview({ augVals, onAugChange }) {
 
   return (
     <div style={{color: "var(--text-primary)"}}>
-      <div style={{display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24}}>
+      <div className="aug-header">
         <div className="hd" style={{marginBottom: 0}}>Vision Simulator</div>
-        <div style={{display: "flex", gap: 12}}>
+        <div className="aug-btns">
           <button onClick={reset} className="btn btn-g" style={{padding: "6px 14px", fontSize: 12}}>↺ Default</button>
           <button onClick={rndm} className="btn btn-p" style={{padding: "6px 14px", fontSize: 12}}>⚡ Randomize</button>
         </div>
@@ -469,7 +469,7 @@ function AugPreview({ augVals, onAugChange }) {
         ))}
       </div>
 
-      <div style={{display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 32}}>
+      <div style={{display: "grid", gridTemplateColumns: "1fr 1fr", gap: isMobile ? 10 : 20, marginBottom: 24}}>
         {[{label: "Source Frame", color: "var(--text-tertiary)", ref: srcRef}, {label: "Augmented Result", color: "var(--accent-primary)", ref: augRef}].map(({label, color, ref}) => (
           <div key={label}>
             <div style={{fontSize: 11, fontWeight: 700, color, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.5px", display: "flex", alignItems: "center", gap: 6}}>
@@ -493,7 +493,7 @@ function AugPreview({ augVals, onAugChange }) {
         ))}
       </div>
 
-      <div style={{display: "grid", gridTemplateColumns: col2, gap: 24, marginBottom: 32}}>
+      <div style={{display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 24, marginBottom: 32}}>
         {groupItems.map(p => {
           const val = augVals?.[p.k] ?? p.def;
           const pct = ((val - p.min) / (p.max - p.min)) * 100;
@@ -540,47 +540,65 @@ function AugPreview({ augVals, onAugChange }) {
 // MODEL DROPDOWN
 // ═══════════════════════════════════════════════════════════════════════════
 function ModelDropdown({ taskId, value, onChange }) {
+  const isMobile = useIsMobile();
   const [open, setOpen] = useState(false);
   const [srch, setSrch] = useState("");
   const [fam, setFam] = useState("all");
   const fams = ["all", "v5", "v8", "v9", "v10", "v11", "v26", "rtdetr", "world", "nas"];
   const models = ALL_MODELS.filter(m => m.t.includes(taskId) && (fam === "all" || m.f === fam) && (!srch || m.n.toLowerCase().includes(srch.toLowerCase())));
   const sel = ALL_MODELS.find(m => m.id === value);
+
+  const dropdownStyle = isMobile ? {
+    position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: 9999,
+    background: "#fff", display: "flex", flexDirection: "column", overflow: "hidden",
+    borderRadius: 0, boxShadow: "none", border: "none", maxHeight: "100dvh",
+  } : {
+    position: "absolute", top: "calc(100% + 12px)", left: 0, right: 0, zIndex: 1000,
+    background: "#fff", border: "1px solid var(--border-color)", borderRadius: 16,
+    boxShadow: "var(--shadow-lg)", maxHeight: 520, display: "flex", flexDirection: "column", overflow: "hidden",
+  };
+
   return (
     <div style={{position: "relative"}}>
       <button onClick={() => setOpen(o => !o)} 
-        style={{width: "100%", padding: "16px 20px", background: "#fff", border: `1px solid ${open ? "var(--accent-primary)" : "var(--border-color)"}`, borderRadius: 12, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, transition: "all .2s", boxShadow: open ? "0 0 0 4px rgba(217, 70, 168, 0.1)" : "var(--shadow-sm)"}}>
-        <div style={{display: "flex", alignItems: "center", gap: 12}}>
-           <div style={{width: 32, height: 32, background: sel ? "var(--accent-primary)" : "var(--bg-tertiary)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 13, fontWeight: 800}}>
+        style={{width: "100%", padding: isMobile ? "14px 16px" : "16px 20px", background: "#fff", border: `1px solid ${open ? "var(--accent-primary)" : "var(--border-color)"}`, borderRadius: 12, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, transition: "all .2s", boxShadow: open ? "0 0 0 4px rgba(217, 70, 168, 0.1)" : "var(--shadow-sm)"}}>
+        <div style={{display: "flex", alignItems: "center", gap: 10, overflow: "hidden"}}>
+           <div style={{width: 32, height: 32, flexShrink: 0, background: sel ? "var(--accent-primary)" : "var(--bg-tertiary)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 13, fontWeight: 800}}>
              {sel ? sel.n[0].toUpperCase() : "?"}
            </div>
-           <span style={{fontWeight: 700, color: sel ? "var(--text-primary)" : "var(--text-tertiary)", fontSize: 16}}>
+           <span style={{fontWeight: 700, color: sel ? "var(--text-primary)" : "var(--text-tertiary)", fontSize: isMobile ? 14 : 16, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"}}>
              {sel ? `${sel.n} — ${sel.p}` : "Select Architecture..."}
            </span>
         </div>
-        <span style={{color: "var(--text-tertiary)", transform: open ? "rotate(180deg)" : "none", transition: "transform .2s"}}>▼</span>
+        <span style={{color: "var(--text-tertiary)", transform: open ? "rotate(180deg)" : "none", transition: "transform .2s", flexShrink: 0}}>▼</span>
       </button>
       {open && (
-        <div style={{position: "absolute", top: "calc(100% + 12px)", left: 0, right: 0, zIndex: 1000, background: "#fff", border: "1px solid var(--border-color)", borderRadius: 16, boxShadow: "var(--shadow-lg)", maxHeight: 520, display: "flex", flexDirection: "column", overflow: "hidden"}}>
-          <div style={{padding: 16, borderBottom: "1px solid var(--border-color)", background: "var(--bg-secondary)", flexShrink: 0}}>
+        <div style={dropdownStyle}>
+          {isMobile && (
+            <div style={{display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 16px 0", borderBottom: "1px solid var(--border-color)", paddingBottom: 12}}>
+              <span style={{fontWeight: 700, fontSize: 16, color: "var(--text-primary)"}}>Select Architecture</span>
+              <button onClick={() => { setOpen(false); setSrch(""); }} style={{background: "var(--bg-secondary)", border: "none", borderRadius: 8, padding: "6px 14px", fontWeight: 700, cursor: "pointer", fontSize: 14}}>✕ Close</button>
+            </div>
+          )}
+          <div style={{padding: isMobile ? "12px 16px" : 16, borderBottom: "1px solid var(--border-color)", background: "var(--bg-secondary)", flexShrink: 0}}>
             <input autoFocus placeholder="Search architectures..." value={srch} onChange={e => setSrch(e.target.value)}
               style={{width: "100%", background: "#fff", border: "1px solid var(--border-color)", borderRadius: 10, padding: "12px 16px", fontSize: 14, outline: "none"}} />
           </div>
           <div className="ftabs" style={{padding: "10px 16px", borderBottom: "1px solid var(--border-color)", marginBottom: 0, background: "var(--bg-tertiary)", overflowX: "auto", flexShrink: 0, flexWrap: "nowrap", whiteSpace: "nowrap"}}>
             {fams.map(f => <div key={f} onClick={() => setFam(f)} className={`ftab${fam === f ? " sel" : ""}`} style={{padding: "6px 12px", fontSize: 10, flexShrink: 0, display: "inline-block"}}>{f.toUpperCase()}</div>)}
           </div>
-          <div style={{overflowY: "auto", flex: 1, minHeight: 0}}>
+          <div style={{overflowY: "auto", flex: 1, minHeight: 0, WebkitOverflowScrolling: "touch"}}>
             {models.length === 0 && <div style={{padding: 32, textAlign: "center", color: "var(--text-tertiary)", fontSize: 14}}>No matching models.</div>}
             {models.map(m => {
               const sc = {"ultralytics": "#D946A8", "tencent": "#A855C7", "deci": "#10B981"}[m.src] || "#D946A8";
               return (
                 <div key={m.id} onClick={() => { onChange(m); setOpen(false); setSrch(""); }}
-                  style={{display: "flex", alignItems: "center", gap: 16, padding: "14px 20px", cursor: "pointer", transition: "background .15s", borderBottom: "1px solid var(--bg-secondary)", background: m.id === value ? "rgba(217, 70, 168, 0.05)" : "transparent"}}>
-                  <div style={{flex: 1}}>
-                    <div style={{fontWeight: 700, color: "var(--text-primary)", fontSize: 15, marginBottom: 2}}>{m.n}</div>
+                  style={{display: "flex", alignItems: "center", gap: 16, padding: isMobile ? "16px" : "14px 20px", cursor: "pointer", transition: "background .15s", borderBottom: "1px solid var(--bg-secondary)", background: m.id === value ? "rgba(217, 70, 168, 0.05)" : "transparent"}}>
+                  <div style={{flex: 1, minWidth: 0}}>
+                    <div style={{fontWeight: 700, color: "var(--text-primary)", fontSize: isMobile ? 14 : 15, marginBottom: 2}}>{m.n}</div>
                     <div style={{fontSize: 12, color: "var(--text-tertiary)"}}>{m.p} · mAP {m.m}</div>
                   </div>
-                  <div style={{textAlign: "right"}}>
+                  <div style={{textAlign: "right", flexShrink: 0}}>
                     <div className="tag" style={{background: `${sc}15`, color: sc, border: "none", fontWeight: 700}}>{m.src}</div>
                     <div style={{fontSize: 10, color: "var(--text-tertiary)", marginTop: 4, fontFamily: "var(--font-mono)"}}>{m.fps} FPS</div>
                   </div>
@@ -714,11 +732,11 @@ body { font-family: var(--font-main); color: var(--text-primary); line-height: 1
 .hero h1 span { font-family: var(--font-serif); font-style: italic; font-weight: 400; color: #fff; }
 .hero p { color: rgba(255, 255, 255, 0.85); font-size: 1.1rem; max-width: 640px; margin: 0 auto 40px; line-height: 1.7; }
 
-.bento-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 24px; margin-top: 40px; }
+.bento-grid { display: grid; gap: 24px; margin-top: 40px; }
 .bento-card { background: rgba(255, 255, 255, 0.75); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border: 1px solid rgba(255, 255, 255, 0.5); border-radius: var(--border-radius-lg); padding: 32px; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); box-shadow: 0 8px 32px rgba(0, 0, 0, 0.06); position: relative; overflow: hidden; }
 .bento-card:hover { transform: translateY(-4px); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.1); border-color: rgba(217, 70, 168, 0.3); }
 
-.sbar { background: rgba(255, 255, 255, 0.25); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 100px; padding: 6px; display: inline-flex; margin: 0 auto 40px; display: flex; max-width: max-content; }
+.sbar { background: rgba(255, 255, 255, 0.25); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 100px; padding: 6px; display: inline-flex; margin: 0 auto 40px; }
 .sit { display: flex; align-items: center; cursor: pointer; padding: 8px 20px; border-radius: 100px; font-size: 14px; font-weight: 600; color: rgba(255, 255, 255, 0.7); transition: all 0.2s; }
 .sit.act { background: rgba(255, 255, 255, 0.85); color: var(--accent-primary); box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
 .sit.done { color: rgba(255, 255, 255, 0.9); }
@@ -795,55 +813,111 @@ input:focus, select:focus { border-color: var(--accent-primary); background: whi
 .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-family: var(--font-mono); font-size: 11px; background: var(--bg-secondary); color: var(--text-secondary); border: 1px solid var(--border-color); }
 
 @media (max-width: 1024px) {
-  .wrap { padding: 0 24px 120px; }
-  .bento-grid { grid-template-columns: 1fr !important; gap: 16px; }
-  .bento-card[style*="span 8"], .bento-card[style*="span 4"] { grid-column: span 1 !important; }
-  .hdr-in { padding: 0 8px; }
+  .wrap { padding: 0 20px 160px; }
+  .hdr-in { padding: 0 4px; }
 }
 
 @media (max-width: 768px) {
+  /* Layout */
+  .wrap { padding: 0 14px 160px; }
+  .hdr { padding: 0 14px; }
+  .hdr-in { height: 56px; }
+  .logo-name { font-size: 1.05rem; }
+  .logo-box { width: 32px; height: 32px; font-size: 1rem; }
+
+  /* Hero landing */
   .hero { padding: 60px 16px 40px; }
-  .hero h1 { font-size: 2.2rem; letter-spacing: -1px; }
-  .hero p { font-size: 1rem; }
-  .card { padding: 16px; }
-  .tgrid { grid-template-columns: 1fr 1fr; }
-  .wrap { padding: 0 16px 120px; }
-  .hdr { padding: 0 16px; }
-  .hdr-in { height: 60px; }
-  .logo-name { font-size: 1.1rem; }
-  .sbar { max-width: 100%; overflow-x: auto; flex-wrap: nowrap; }
-  .sit { padding: 8px 12px; font-size: 12px; white-space: nowrap; }
+  .hero h1 { font-size: clamp(1.8rem, 8vw, 2.4rem); letter-spacing: -1px; }
+  .hero p { font-size: 0.95rem; }
+
+  /* Step nav bar — scrollable pill row */
+  .sbar { max-width: calc(100vw - 28px); overflow-x: auto; -webkit-overflow-scrolling: touch; flex-wrap: nowrap; border-radius: 16px; scrollbar-width: none; }
+  .sbar::-webkit-scrollbar { display: none; }
+  .sit { padding: 8px 14px; font-size: 12px; white-space: nowrap; flex-shrink: 0; }
   .sit-n { display: none; }
-  .nb { bottom: 16px; width: calc(100% - 32px); padding: 10px 16px; border-radius: 16px; }
-  .nb-in { gap: 8px; }
+
+  /* Cards & bento */
+  .bento-card { padding: 18px; border-radius: 20px; }
+  .card { padding: 14px; }
+
+  /* Task grid: 2 cols on mobile */
+  .tgrid { grid-template-columns: 1fr 1fr; gap: 10px; }
+  .tc { padding: 12px; }
+  .tc-name { font-size: 0.85rem; }
+  .tc-desc { font-size: 12px; }
+  .tc-uc { font-size: 11px; }
+
+  /* Buttons */
   .btn { padding: 10px 16px; font-size: 13px; }
-  .btn-gen { font-size: 14px; padding: 14px; }
-  .bento-card { padding: 20px; border-radius: 20px; }
-  .sgrid { grid-template-columns: repeat(2, 1fr); }
-  .mdet-stats { gap: 12px; }
-  .ftabs { gap: 6px; }
-  .ftab { padding: 8px 14px; font-size: 12px; }
-  .gtab { font-size: 11px; padding: 8px 4px; }
-  .spleg { flex-wrap: wrap; gap: 12px; }
+  .btn-gen { font-size: 13px; padding: 13px 16px; }
+
+  /* Nav bar */
+  .nb { bottom: 12px; width: calc(100% - 24px); padding: 10px 14px; border-radius: 16px; }
+  .nb-in { gap: 8px; }
+
+  /* Model stats */
+  .sgrid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .mdet-stats { gap: 8px; }
+  .sitem { padding: 10px 12px; }
+
+  /* Format tabs */
+  .ftabs { gap: 6px; flex-wrap: wrap; }
+  .ftab { padding: 8px 12px; font-size: 11px; }
+
+  /* Format guide tabs */
+  .gtab { font-size: 10px; padding: 8px 2px; }
+  .gbody { padding: 12px; }
+  .gbody pre { font-size: 11px; padding: 10px; }
+
+  /* Split legend */
+  .spleg { flex-wrap: wrap; gap: 10px; }
+
+  /* Classes row */
   .clsrow { flex-direction: column; gap: 8px; }
-  .clsrow .btn { width: 100%; border-radius: 12px !important; }
+  .clsrow input { width: 100%; }
+  .clsrow .btn { width: 100%; border-radius: 12px !important; text-align: center; }
+
+  /* Download rows */
   .dlrow { flex-direction: column; align-items: flex-start; gap: 8px; }
-  .dlrow .btn { width: 100%; }
-  .logbox { font-size: 11px; }
-  .code { font-size: 11px; max-height: 280px; }
+  .dlrow .btn { width: 100%; text-align: center; border-radius: 10px !important; }
+
+  /* Output tabs */
   .otabs { gap: 6px; }
-  .otab { padding: 6px 12px; font-size: 12px; }
+  .otab { padding: 6px 12px; font-size: 11px; }
+
+  /* Log & code */
+  .logbox { font-size: 11px; padding: 14px; max-height: 240px; }
+  .code { font-size: 10px; padding: 14px; max-height: 240px; line-height: 1.6; }
+
+  /* Instruction list */
+  .sli { gap: 10px; }
+  .sn { width: 24px; height: 24px; font-size: 11px; flex-shrink: 0; }
+  .st2 { font-size: 13px; }
+
+  /* Aug preview header */
+  .aug-header { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .aug-header .aug-btns { width: 100%; display: flex; gap: 8px; }
+  .aug-header .aug-btns button { flex: 1; }
+
+  /* Misc */
+  .hd { font-size: 11px; margin-bottom: 14px; }
+  .lbl { font-size: 11px; }
+  .tag { font-size: 10px; }
+  .sv { font-size: 13px; }
+  input[type=text], input[type=number], select { font-size: 14px; padding: 10px 12px; }
 }
 
 @media (max-width: 480px) {
-  .hero h1 { font-size: 1.8rem; }
+  .hero h1 { font-size: 1.7rem; }
   .tgrid { grid-template-columns: 1fr; }
+  .bento-card { padding: 14px; border-radius: 16px; }
+  .sbar { border-radius: 12px; }
+  .sit { padding: 7px 10px; font-size: 11px; }
   .sgrid { grid-template-columns: 1fr 1fr; }
-  .bento-card { padding: 16px; border-radius: 16px; }
-  .sbar { padding: 4px; }
-  .sit { padding: 6px 10px; font-size: 11px; }
-  .hd { font-size: 11px; }
-  .lbl { font-size: 11px; }
+  .ftab { padding: 7px 10px; font-size: 10px; }
+  .platcard { padding: 14px !important; }
+  .plat-n { font-size: 14px !important; }
+  .plat-s { font-size: 12px !important; }
 }
   
 /* Dataset & Custom Components */
@@ -883,6 +957,9 @@ input:focus, select:focus { border-color: var(--accent-primary); background: whi
 .chk input[type=checkbox] { width: 18px; height: 18px; border-radius: 4px; border: 2px solid var(--border-color); cursor: pointer; accent-color: var(--accent-primary); }
 
 .lbl { display: block; font-size: 12px; font-weight: 800; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
+.g2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.aug-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+.aug-btns { display: flex; gap: 12px; }
 `;
 
   // ── Premium Slider Helper ──────────────────────────────────────────────
@@ -1357,8 +1434,8 @@ input:focus, select:focus { border-color: var(--accent-primary); background: whi
           <h1>Design your <span>Computer Vision</span> pipeline</h1>
           <p>The most advanced agentic platform to generate production-ready YOLO training environments in seconds.</p>
           
-          <div style={{marginTop: 48}}>
-            <button className="btn btn-p" onClick={() => setStarted(true)} style={{padding: "20px 60px", fontSize: 20, borderRadius: 100, boxShadow: "0 20px 40px rgba(217, 70, 168, 0.25)"}}>
+          <div style={{marginTop: 48, padding: "0 16px"}}>
+            <button className="btn btn-p" onClick={() => setStarted(true)} style={{padding: isMobile ? "16px 32px" : "20px 60px", fontSize: isMobile ? 16 : 20, borderRadius: 100, boxShadow: "0 20px 40px rgba(217, 70, 168, 0.25)", width: isMobile ? "100%" : "auto"}}>
               Get Started — Forging v2.0
             </button>
             <div style={{marginTop: 24, display: "flex", gap: isMobile ? 16 : 32, justifyContent: "center", color: "rgba(255,255,255,0.7)", fontSize: isMobile ? 12 : 14, fontWeight: 600, flexWrap: "wrap"}}>
@@ -1371,7 +1448,7 @@ input:focus, select:focus { border-color: var(--accent-primary); background: whi
       ) : (
         <>
           {/* Progress Header */}
-          <div style={{textAlign:"center", paddingTop: isMobile ? 80 : 120, paddingBottom: isMobile ? 32 : 60, position: "relative", zIndex: 1}}>
+          <div style={{textAlign:"center", paddingTop: isMobile ? 72 : 120, paddingBottom: isMobile ? 20 : 60, position: "relative", zIndex: 1}}>
              <div className="sbar" style={{margin: "0 auto", overflowX: "auto"}}>
                 {STEPS.map((s, i) => (
                   <div key={s} className={`sit${step === i ? " act" : ""}${step > i ? " done" : ""}`} onClick={() => setStep(i)}>
@@ -1382,65 +1459,74 @@ input:focus, select:focus { border-color: var(--accent-primary); background: whi
           </div>
 
           {/* Main Content with Bento Grid */}
-          <main className="wrap" style={{paddingTop: isMobile ? 40 : 80, position: "relative", zIndex: 1}}>
-            <div className="bento-grid" style={{display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(12, 1fr)", gap: isMobile ? 16 : 24}}>
+          <main className="wrap" style={{paddingTop: isMobile ? 0 : 80, position: "relative", zIndex: 1}}>
+            <div className="bento-grid" style={{
+              display: "grid",
+              gridTemplateColumns: isMobile ? "1fr" : "repeat(12, 1fr)",
+              gap: isMobile ? 14 : 24,
+            }}>
               {/* Main Config Card */}
               <div className="bento-card" style={{gridColumn: isMobile ? "span 1" : "span 8"}}>
                 {stepContent[step]}
               </div>
 
               {/* Sidebar Area */}
-              <div style={{gridColumn: isMobile ? "span 1" : "span 4", display: "flex", flexDirection: isMobile ? "row" : "column", gap: 16, flexWrap: isMobile ? "wrap" : "nowrap"}}>
-                <div className="bento-card" style={{padding: 20, flex: isMobile ? "1 1 calc(50% - 8px)" : "none", minWidth: isMobile ? "calc(50% - 8px)" : "auto"}}>
-                  <div className="hd" style={{marginBottom: 16, fontSize: 11}}>Model Context</div>
-                  <div style={{display:"flex",flexDirection:"column",gap:12}}>
-                    <div style={{display:"flex",justifyContent:"space-between",fontSize:13}}>
-                      <span style={{color:"var(--text-tertiary)"}}>Task</span>
-                      <span style={{fontWeight:700,color:"var(--text-primary)"}}>{task?.label || "-"}</span>
+              <div style={{
+                gridColumn: isMobile ? "span 1" : "span 4",
+                display: "grid",
+                gridTemplateColumns: isMobile ? "1fr 1fr 1fr" : "1fr",
+                gap: isMobile ? 10 : 16,
+              }}>
+                <div className="bento-card" style={{padding: isMobile ? 14 : 20}}>
+                  <div className="hd" style={{marginBottom: 12, fontSize: 10}}>Model Context</div>
+                  <div style={{display:"flex",flexDirection:"column",gap:isMobile?8:12}}>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:isMobile?11:13,gap:4}}>
+                      <span style={{color:"var(--text-tertiary)",flexShrink:0}}>Task</span>
+                      <span style={{fontWeight:700,color:"var(--text-primary)",textAlign:"right",wordBreak:"break-word",fontSize:isMobile?11:13}}>{task?.short || task?.label || "-"}</span>
                     </div>
-                    <div style={{display:"flex",justifyContent:"space-between",fontSize:13}}>
-                      <span style={{color:"var(--text-tertiary)"}}>Architecture</span>
-                      <span style={{fontWeight:700,color:"var(--text-primary)"}}>{model?.n || "-"}</span>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:isMobile?11:13,gap:4}}>
+                      <span style={{color:"var(--text-tertiary)",flexShrink:0}}>Model</span>
+                      <span style={{fontWeight:700,color:"var(--text-primary)",textAlign:"right",wordBreak:"break-word",fontSize:isMobile?11:13}}>{model?.n || "-"}</span>
                     </div>
-                    <div style={{display:"flex",justifyContent:"space-between",fontSize:13}}>
-                      <span style={{color:"var(--text-tertiary)"}}>Mode</span>
-                      <span className="tag" style={{background:"rgba(217, 70, 168, 0.1)",color:"var(--accent-primary)",border:"none",padding:"1px 6px"}}>{mode}</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="bento-card" style={{padding: 20, flex: isMobile ? "1 1 calc(50% - 8px)" : "none", minWidth: isMobile ? "calc(50% - 8px)" : "auto"}}>
-                  <div className="hd" style={{marginBottom: 16, fontSize: 11}}>Data & Vision</div>
-                  <div style={{display:"flex",flexDirection:"column",gap:12}}>
-                    <div style={{display:"flex",justifyContent:"space-between",fontSize:13}}>
-                      <span style={{color:"var(--text-tertiary)"}}>Format</span>
-                      <span style={{fontWeight:700,color:"var(--text-primary)"}}>{FORMAT_GUIDE[fmt]?.label || "-"}</span>
-                    </div>
-                    <div style={{display:"flex",justifyContent:"space-between",fontSize:13}}>
-                      <span style={{color:"var(--text-tertiary)"}}>Image Size</span>
-                      <span style={{fontWeight:700,color:"var(--text-primary)"}}>{imgSz}px</span>
-                    </div>
-                    <div style={{display:"flex",justifyContent:"space-between",fontSize:13}}>
-                      <span style={{color:"var(--text-tertiary)"}}>Augmentations</span>
-                      <span style={{fontWeight:700,color:(augOnCount>0?"var(--accent-primary)":"var(--text-tertiary)")}}>{augOnCount} Active</span>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:isMobile?11:13,gap:4}}>
+                      <span style={{color:"var(--text-tertiary)",flexShrink:0}}>Mode</span>
+                      <span className="tag" style={{background:"rgba(217,70,168,0.1)",color:"var(--accent-primary)",border:"none",padding:"1px 6px",fontSize:isMobile?9:11}}>{mode}</span>
                     </div>
                   </div>
                 </div>
 
-                <div className="bento-card" style={{padding: 20, flex: isMobile ? "1 1 calc(50% - 8px)" : "none", minWidth: isMobile ? "calc(50% - 8px)" : "auto"}}>
-                  <div className="hd" style={{marginBottom: 16, fontSize: 11}}>Training Params</div>
-                  <div style={{display:"flex",flexDirection:"column",gap:12}}>
-                    <div style={{display:"flex",justifyContent:"space-between",fontSize:13}}>
-                      <span style={{color:"var(--text-tertiary)"}}>Epochs</span>
-                      <span style={{fontWeight:700,color:"var(--text-primary)"}}>{hp.epochs}</span>
+                <div className="bento-card" style={{padding: isMobile ? 14 : 20}}>
+                  <div className="hd" style={{marginBottom: 12, fontSize: 10}}>Data & Vision</div>
+                  <div style={{display:"flex",flexDirection:"column",gap:isMobile?8:12}}>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:isMobile?11:13,gap:4}}>
+                      <span style={{color:"var(--text-tertiary)",flexShrink:0}}>Format</span>
+                      <span style={{fontWeight:700,color:"var(--text-primary)",textAlign:"right",fontSize:isMobile?10:13}}>{isMobile ? fmt.toUpperCase() : FORMAT_GUIDE[fmt]?.label || "-"}</span>
                     </div>
-                    <div style={{display:"flex",justifyContent:"space-between",fontSize:13}}>
-                      <span style={{color:"var(--text-tertiary)"}}>Batch Size</span>
-                      <span style={{fontWeight:700,color:"var(--text-primary)"}}>{hp.batch}</span>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:isMobile?11:13,gap:4}}>
+                      <span style={{color:"var(--text-tertiary)",flexShrink:0}}>Img</span>
+                      <span style={{fontWeight:700,color:"var(--text-primary)",fontSize:isMobile?11:13}}>{imgSz}px</span>
                     </div>
-                    <div style={{display:"flex",justifyContent:"space-between",fontSize:13}}>
-                      <span style={{color:"var(--text-tertiary)"}}>Split</span>
-                      <span style={{fontWeight:700,color:"var(--text-primary)"}}>{trainSplit}/{valSplit}/{testSplit}</span>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:isMobile?11:13,gap:4}}>
+                      <span style={{color:"var(--text-tertiary)",flexShrink:0}}>Augs</span>
+                      <span style={{fontWeight:700,color:(augOnCount>0?"var(--accent-primary)":"var(--text-tertiary)"),fontSize:isMobile?11:13}}>{augOnCount}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bento-card" style={{padding: isMobile ? 14 : 20}}>
+                  <div className="hd" style={{marginBottom: 12, fontSize: 10}}>Train Params</div>
+                  <div style={{display:"flex",flexDirection:"column",gap:isMobile?8:12}}>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:isMobile?11:13,gap:4}}>
+                      <span style={{color:"var(--text-tertiary)",flexShrink:0}}>Epochs</span>
+                      <span style={{fontWeight:700,color:"var(--text-primary)",fontSize:isMobile?11:13}}>{hp.epochs}</span>
+                    </div>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:isMobile?11:13,gap:4}}>
+                      <span style={{color:"var(--text-tertiary)",flexShrink:0}}>Batch</span>
+                      <span style={{fontWeight:700,color:"var(--text-primary)",fontSize:isMobile?11:13}}>{hp.batch}</span>
+                    </div>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:isMobile?11:13,gap:4}}>
+                      <span style={{color:"var(--text-tertiary)",flexShrink:0}}>Split</span>
+                      <span style={{fontWeight:700,color:"var(--text-primary)",fontSize:isMobile?10:13}}>{trainSplit}/{valSplit}/{testSplit}</span>
                     </div>
                   </div>
                 </div>
