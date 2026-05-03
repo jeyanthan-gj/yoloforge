@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════════════
-const API = "import.meta.env.VITE_API_URL";
+const API = import.meta.env.VITE_API_URL;
 
 const TASKS = [
   { id:"detect",   image:"/images/task_detect.png", label:"Object Detection",        short:"Detect",
